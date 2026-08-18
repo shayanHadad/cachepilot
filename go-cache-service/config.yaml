@@ -1,0 +1,23 @@
+# CachePilot — go-cache-service configuration
+#
+# Any field can be omitted to fall back to the default defined in
+# internal/config/config.go. Any field can also be overridden at
+# deploy time via the corresponding CACHEPILOT_* environment variable
+
+mongo:
+  uri: "mongodb://localhost:27017"
+  db: "cachepilot"
+
+cache:
+  # lru | lfu | ml
+  policy: "lru"
+  capacity: 1000
+
+mlservice:
+  grpc_addr: "localhost:50051"
+  # Fallback timeout for the ML gRPC call on the hot cache-miss path.
+  # Must stay between 5 and 10 (see project spec's fallback decision).
+  timeout_ms: 8
+
+logging:
+  path: "data/raw_logs/service.jsonl"
