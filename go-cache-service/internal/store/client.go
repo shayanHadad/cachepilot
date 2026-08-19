@@ -72,6 +72,22 @@ type postJSON struct {
 	CommentsCount int      `json:"comments_count"`
 	MediaSizeKB   float64  `json:"media_size_kb"`
 	Tags          []string `json:"tags"`
+	// QueryType is derived, not stored in MongoDB: "text_post" when
+	// MediaSizeKB is 0, "media_post" otherwise. Computed here so
+	// every consumer of this JSON (cache manager, logger, offline
+	// data pipeline) sees the same classification instead of each
+	// re-deriving it independently.
+	QueryType string `json:"query_type"`
+}
+
+// queryTypeFor derives the QueryType classification from a post's
+// media size, per the project's domain model decision (a post is a
+// "media_post" if it carries any non-text payload).
+func queryTypeFor(mediaSizeKB float64) string {
+	if mediaSizeKB > 0 {
+		return "media_post"
+	}
+	return "text_post"
 }
 
 // GetPost fetches the post document with the given hex-encoded
@@ -101,6 +117,7 @@ func (s *Store) GetPost(ctx context.Context, id string) ([]byte, error) {
 		CommentsCount: doc.CommentsCount,
 		MediaSizeKB:   doc.MediaSizeKB,
 		Tags:          doc.Tags,
+		QueryType:     queryTypeFor(doc.MediaSizeKB),
 	}
 
 	data, err := json.Marshal(out)
