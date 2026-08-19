@@ -9,6 +9,7 @@ extending the system.
 ## JSONL Logging: Why, and Its Limitations
 
 ### Decision
+
 Raw request logs (`internal/logger`) are written as a plain-text
 JSON Lines (`.jsonl`) file — not a separate database, not a message
 queue, and not a centralized logging system.
@@ -17,6 +18,7 @@ strategy instead of blocking the main response path when the
 internal buffer fills up).
 
 ### Why this is the right choice for this project
+
 1. **Simplicity and transparency** — a human-readable text file that
    works with simple tools (`cat`, `less`, direct processing with
    pandas), with no need to stand up extra infrastructure.
@@ -31,6 +33,7 @@ internal buffer fills up).
    periodically is entirely sufficient.
 
 ### Limitations in a real production system
+
 This decision is appropriate for the scale of this project, but it
 has a few known limitations that should be accepted knowingly:
 
@@ -56,8 +59,52 @@ has a few known limitations that should be accepted knowingly:
    rate can be measured and reported rather than hidden.
 
 ### Conclusion
+
 This decision was made knowingly, with awareness of its trade-offs,
 not out of unfamiliarity with production-grade solutions. For the
 goal of this project (comparing cache eviction policies, not building
 an industrial logging system), the simplicity of JSONL is worth more
 than the scalability/durability of a message queue.
+
+## Post serialization: typed conversion instead of direct map marshaling
+
+**Decision:** When reading a post document from MongoDB, decode it into
+a typed struct that mirrors the BSON shape, then explicitly convert
+that into a second struct built from plain JSON-friendly types before
+marshaling. Do not decode into a generic map and marshal that map
+directly.
+
+**Why:**
+
+Decoding into a generic map (`map[string]interface{}`) and marshaling
+it directly looks correct but is not: MongoDB's driver types for `_id`
+and date fields implement their own `MarshalJSON`, which produces
+MongoDB's Extended JSON format instead of plain JSON — e.g. an object
+id becomes `{"$oid": "..."}` rather than a plain hex string, and a
+timestamp becomes `{"$date": <ms>}` rather than a plain number. Since
+both types satisfy Go's `json.Marshaler` interface, the standard
+library defers to their custom encoding with no error or warning, so
+the generic-map approach fails silently — the bug only surfaces
+downstream, when a consumer expects a scalar field and receives a
+nested object instead.
+
+The fix is a two-struct pattern: one struct decodes the raw BSON
+(using the driver's real types), a second struct holds only plain Go
+types (`string`, `int64`, etc.), and an explicit field-by-field
+conversion sits between them. This guarantees the JSON that actually
+gets cached and logged uses plain, predictable types, regardless of
+what the underlying driver's default JSON encoding would have done.
+
+**Timestamp representation:** post timestamps are serialized as
+Unix milliseconds (`int64`), not an RFC3339 string, for consistency
+with the existing logging timestamp convention — see the JSONL
+logging entry above. This avoids ambiguity across the Go/Python
+process boundary and keeps timestamp handling uniform across every
+component that reads these values (cache layer, offline data
+pipeline, feature engineering).
+
+**Trade-off:** this pattern requires keeping two structs in sync
+whenever the document schema changes (one field addition means
+touching both the BSON-decode struct and the JSON-output struct). This
+is an accepted cost in exchange for the serialized output being
+explicit and independent of any driver-level default encoding.
