@@ -108,3 +108,113 @@ whenever the document schema changes (one field addition means
 touching both the BSON-decode struct and the JSON-output struct). This
 is an accepted cost in exchange for the serialized output being
 explicit and independent of any driver-level default encoding.
+
+---
+
+## Deriving `query_type` at the Serialization Boundary
+
+### Decision
+
+`query_type` ("text_post" vs "media_post") is computed once, inside
+the MongoDB read path (`internal/store`), and included directly in
+the JSON that gets cached, logged, and passed to the ML decision
+service — rather than being recomputed independently by each
+consumer.
+
+### Why
+
+`query_type` is a derived field, not something stored in MongoDB
+(see the domain model decision: it comes from `media_size_kb == 0`).
+Multiple components need it — the request logger, the ML feature
+set, potentially the offline data pipeline — and if each computed it
+separately from raw post data, a future change to the classification
+rule would require updating every call site in lockstep, with no
+compiler error if one were missed. Computing it once at the point
+where the raw MongoDB document is first read, and carrying it as a
+plain field in the serialized JSON from then on, means every
+downstream consumer reads the same value instead of re-deriving it.
+
+---
+
+## Per-Key Access Tracking (`internal/features`)
+
+### Decision
+
+A dedicated package maintains a short (five-minute) sliding window of
+access timestamps per key, decoupled from both the cache and the ML
+transport layer, and exposes a single `Observe(key, timestamp)` call
+that returns the current frequency/recency/inter-arrival statistics
+for that key.
+
+### Why
+
+The ML decision service needs time-windowed features
+(`frequency_1min`, `frequency_5min`, `recency_sec`,
+`inter_arrival_avg`) on every cache-miss. Computing these requires
+retaining a short history of recent accesses per key somewhere — this
+wasn't an explicit part of the original module list and was
+identified as a gap while designing the cache manager.
+
+Two design choices are worth calling out:
+
+- **A single `Observe` call instead of separate "record" and
+  "compute" calls.** Splitting them invites a subtle ordering bug:
+  if the current access is recorded before its own statistics are
+  computed, "recency since last access" becomes ~0 on every call,
+  silently. `Observe` computes from history _before_ appending the
+  current timestamp, making the correct ordering the only one
+  possible.
+- **Fixed, non-configurable retention windows.** The one- and
+  five-minute windows are hardcoded constants rather than
+  constructor parameters, so a future caller can't accidentally pass
+  a retention shorter than five minutes and silently undercount
+  `frequency_5min`.
+
+Cleanup of stale per-key history runs on an independent periodic
+timer (not tied to cache eviction), keeping this package fully
+decoupled from the cache's own lifecycle.
+
+---
+
+## TTL Bookkeeping and Dual Hit/Miss Counters in the Cache Manager
+
+### Decision
+
+The `Cache` interface (LRU/LFU) has no concept of TTL and never will
+— TTL enforcement for the ML-driven policy is handled entirely
+inside the cache manager, via its own `key -> expiry time` map,
+populated only when the active policy is "ml". Separately, the
+manager keeps its own hit/miss counters rather than relying solely on
+the underlying cache's counters.
+
+### Why
+
+LRU and LFU are meant to be "pure" baselines with no TTL behavior —
+adding a TTL parameter to `Cache.Put` that two of three
+implementations would simply ignore was rejected as unnecessary
+interface pollution. Instead, the manager treats a cache hit as
+"expired" against its own bookkeeping and falls back to a MongoDB
+read, without requiring any change to the underlying cache
+implementations.
+
+This has one direct consequence for evaluation-metric accuracy: the
+underlying cache's own hit/miss counters have no notion of TTL, so
+under the "ml" policy they can report a hit for an entry the manager
+is about to treat as logically stale. Reading hit rate directly from
+the underlying cache would overstate the ML policy's effectiveness.
+The manager therefore keeps independent, TTL-aware hit/miss counters
+and exposes them via its own `Stats()`, while still deferring to the
+underlying cache for the eviction count (a purely capacity-driven
+concept with no TTL involvement). For the lru/lfu policies, the
+manager's counters and the underlying cache's counters should always
+match exactly — a free consistency check during baseline experiments.
+
+### Known limitation
+
+An expired-but-not-yet-overwritten entry can continue occupying a
+capacity slot in the underlying cache until the next write to that
+key or a natural eviction reclaims it. Fixing this fully would mean
+adding explicit deletion to the `Cache` interface and wiring TTL
+through every policy implementation — a larger change than
+currently justified. Revisit if evaluation runs show this skewing
+capacity-pressure results under the "ml" policy.
