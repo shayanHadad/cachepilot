@@ -1,0 +1,36 @@
+# CachePilot — Experiment Log
+
+A running log of benchmark and evaluation runs. Log even early
+trial-and-error/debugging runs — they can be filtered out later, but
+you can't reconstruct them after the fact.
+
+Record each experiment using this template:
+
+```
+## Experiment [number] — [short description]
+**Date:** ...
+**Commit hash:** (output of git rev-parse HEAD)
+
+**Parameters:**
+- cache.policy: lru / lfu / ml
+- cache.capacity: ...
+- workload: zipf_param=..., enable_burst=..., burst_rate=...,
+  burst_intensity=..., burst_duration=..., seed=...
+- total number of requests: ...
+
+**Raw result:**
+- Hits: ...
+- Misses: ...
+- Evictions: ...
+- Hit rate: ...
+- Average latency: ...
+- p95 latency: ...
+- (related raw file, if saved: docs/raw-results/exp-XX.json)
+
+**One-line conclusion:** ...
+```
+
+---
+
+<!-- Add real experiments here going forward, once we reach the
+workload-generator/evaluation phase -->
