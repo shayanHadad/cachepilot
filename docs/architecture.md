@@ -274,3 +274,36 @@ which had no way to populate that field without it. Fixed by adding
 `key` as an explicit parameter to `Decide`, rather than folding it
 into `Features`, to keep `Features` meaning exactly one thing: the
 model's actual inputs.
+
+---
+
+## The "ml" Policy's Underlying Storage
+
+### Decision
+
+When `cache.policy` is set to `"ml"`, the service still builds an
+`LRU` cache as the concrete `Cache` implementation underneath
+`Manager` — there's no separate "ML-native" storage structure.
+
+### Why
+
+`Manager` only decides two things for the ML policy: whether to admit
+a value at all, and how long it should live (TTL). Neither of those
+is a storage mechanism — something still has to physically hold the
+cached bytes, and that something still has a fixed capacity that can
+fill up. When it does, an eviction has to happen, and LRU (evict
+whatever was least recently touched) is a reasonable default choice
+for that fallback, rather than something arbitrary like evicting a
+random key.
+
+### Why this matters for the evaluation
+
+It's worth being explicit about this rather than letting it stay an
+implementation detail: the "ml" policy is not "ML all the way down".
+It's LRU eviction with an ML-driven admission/TTL layer sitting on
+top of it. When comparing "ml" against the "lru" baseline in
+evaluation, the underlying eviction mechanics are actually identical
+in both cases — the only variable being measured is whether the
+admission/TTL layer improves on always-admit-no-TTL. This is a
+meaningful nuance to state plainly rather than let a reader assume
+the ML policy replaced LRU entirely.
