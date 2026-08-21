@@ -13,9 +13,11 @@ import (
 	"github.com/shayanHadad/cachepilot/internal/types"
 )
 
-// Logger asynchronously writes LogEntry records to a JSONL file, one
-// JSON object per line, using the standard library's log/slog
-// Writing happens on a dedicated goroutine so Log() never blocks the request path.
+// flushInterval controls how often buffered log data is flushed to
+// disk even if the logger stays busy and Close() hasn't been called yet.
+const flushInterval = 1 * time.Second
+
+// Logger asynchronously writes LogEntry records to a JSONL file.
 type Logger struct {
 	entries chan types.LogEntry
 	file    *os.File
@@ -29,8 +31,6 @@ type Logger struct {
 
 // NewLogger opens (creating if needed) the JSONL file at path in
 // append mode and starts the background writer goroutine.
-// bufferSize controls how many entries can be queued before Log()
-// starts dropping new entries.
 func NewLogger(path string, bufferSize int) (*Logger, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("logger: failed to create log directory: %w", err)
@@ -81,13 +81,31 @@ func (l *Logger) Log(entry types.LogEntry) {
 }
 
 // run is the background writer goroutine: it reads entries from the
-// channel until the channel is closed and drained, writing each one
-// as a single structured JSON line via slog.
+// channel and periodically flushes to disk, until the channel is
+// closed and fully drained.
 func (l *Logger) run() {
 	defer close(l.done)
 
-	for entry := range l.entries {
-		l.writeEntry(entry)
+	ticker := time.NewTicker(flushInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case entry, ok := <-l.entries:
+			if !ok {
+				// Channel closed by Close() and fully drained —
+				// nothing left to read. Close() does its own final
+				// Flush() right after this goroutine exits, so we
+				// don't need to flush here too.
+				return
+			}
+			l.writeEntry(entry)
+
+		case <-ticker.C:
+			if err := l.writer.Flush(); err != nil {
+				fmt.Fprintf(os.Stderr, "logger: periodic flush failed: %v\n", err)
+			}
+		}
 	}
 }
 
