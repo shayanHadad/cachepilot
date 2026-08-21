@@ -3,6 +3,7 @@ package mlclient
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -38,14 +39,39 @@ func NewClient(addr string) (*Client, error) {
 
 // Decide implements cache.Decider.
 func (c *Client) Decide(ctx context.Context, key string, features cache.Features) (types.CacheDecision, error) {
-	req := cache.ToDecisionRequest(key, features)
+	req := toDecisionRequest(key, features)
 
 	resp, err := c.rpc.Decide(ctx, req)
 	if err != nil {
 		return types.CacheDecision{}, fmt.Errorf("mlclient: Decide RPC failed: %w", err)
 	}
 
-	return cache.FromDecisionResponse(resp), nil
+	return fromDecisionResponse(resp), nil
+}
+
+// toDecisionRequest turns our own Features struct into the protobuf
+// message the ML service expects on the wire.
+func toDecisionRequest(key string, f cache.Features) *decisionpb.DecisionRequest {
+	return &decisionpb.DecisionRequest{
+		Key:             key,
+		Frequency_1Min:  int32(f.Frequency1Min),
+		Frequency_5Min:  int32(f.Frequency5Min),
+		RecencySec:      f.RecencySec,
+		InterArrivalAvg: f.InterArrivalAvg,
+		PayloadSizeKb:   f.PayloadSizeKB,
+		QueryType:       f.QueryType,
+	}
+}
+
+// fromDecisionResponse does the reverse: takes what came back over
+// the wire and turns it into the CacheDecision the rest of the
+// service actually works with.
+func fromDecisionResponse(resp *decisionpb.DecisionResponse) types.CacheDecision {
+	return types.CacheDecision{
+		Admit:  resp.Admit,
+		TTL:    time.Duration(resp.TtlMs) * time.Millisecond,
+		Source: resp.Source,
+	}
 }
 
 // Close closes the underlying gRPC connection.
