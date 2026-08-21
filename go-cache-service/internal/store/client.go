@@ -39,9 +39,14 @@ func NewStore(ctx context.Context, cfg config.MongoConfig) (*Store, error) {
 		return nil, fmt.Errorf("store: failed to ping MongoDB: %w", err)
 	}
 
+	posts := client.Database(cfg.DB).Collection("posts")
+	if err := EnsureIndexes(ctx, posts); err != nil {
+		return nil, fmt.Errorf("store: failed to ensure indexes: %w", err)
+	}
+
 	return &Store{
 		client: client,
-		posts:  client.Database(cfg.DB).Collection("posts"),
+		posts:  posts,
 	}, nil
 }
 

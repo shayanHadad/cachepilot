@@ -10,10 +10,17 @@ import (
 
 // Config is the top-level configuration for the go-cache-service.
 type Config struct {
+	Server    ServerConfig    `yaml:"server"`
 	Mongo     MongoConfig     `yaml:"mongo"`
 	Cache     CacheConfig     `yaml:"cache"`
 	MLService MLServiceConfig `yaml:"mlservice"`
 	Logging   LoggingConfig   `yaml:"logging"`
+}
+
+// ServerConfig holds settings for the service's own HTTP listener.
+type ServerConfig struct {
+	// Port is the TCP port the HTTP server listens on.
+	Port int `yaml:"port"`
 }
 
 // MongoConfig holds MongoDB connection settings.
@@ -44,6 +51,9 @@ type LoggingConfig struct {
 // defaults are applied for any field left unset (zero value) after
 // parsing the YAML file, before env var overrides are applied.
 var defaults = Config{
+	Server: ServerConfig{
+		Port: 8080,
+	},
 	Mongo: MongoConfig{
 		URI: "mongodb://localhost:27017",
 		DB:  "cachepilot",
@@ -90,6 +100,11 @@ func Load(path string) (*Config, error) {
 // deployment environments (docker-compose, CI) override settings
 // without editing config.yaml.
 func applyEnvOverrides(cfg *Config) {
+	if v := os.Getenv("CACHEPILOT_SERVER_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Server.Port = n
+		}
+	}
 	if v := os.Getenv("CACHEPILOT_MONGO_URI"); v != "" {
 		cfg.Mongo.URI = v
 	}
@@ -120,6 +135,10 @@ func applyEnvOverrides(cfg *Config) {
 // Validate checks that the configuration has sane values, returning
 // an error describing the first problem found.
 func (c *Config) Validate() error {
+	if c.Server.Port <= 0 || c.Server.Port > 65535 {
+		return fmt.Errorf("server.port must be between 1 and 65535, got %d", c.Server.Port)
+	}
+
 	switch c.Cache.Policy {
 	case "lru", "lfu", "ml":
 		// ok

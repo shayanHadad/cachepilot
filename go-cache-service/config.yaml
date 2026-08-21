@@ -4,6 +4,9 @@
 # internal/config/config.go. Any field can also be overridden at
 # deploy time via the corresponding CACHEPILOT_* environment variable
 
+server:
+  port: 8080
+
 mongo:
   uri: "mongodb://localhost:27017"
   db: "cachepilot"
