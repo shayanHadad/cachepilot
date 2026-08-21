@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package cachepilot.decision.v1;
+
+option go_package = "github.com/shayanHadad/cachepilot/internal/mlclient/decisionpb;decisionpb";
+
+// DecisionService is the ML admission/TTL decision service.
+service DecisionService {
+  // Decide returns an admission and TTL decision for a single
+  // cache-miss.
+  rpc Decide(DecisionRequest) returns (DecisionResponse);
+}
+
+// DecisionRequest carries the time-windowed and document-derived
+// features for one cache-miss.
+message DecisionRequest {
+  // key is the post's hex-encoded MongoDB _id.
+  string key = 1;
+
+  // frequency_1min is the number of times this key was accessed in
+  // the last minute.
+  int32 frequency_1min = 2;
+
+  // frequency_5min is the number of times this key was accessed in
+  // the last five minutes.
+  int32 frequency_5min = 3;
+
+  // recency_sec is the time in seconds since the previous access to
+  // this key.
+  double recency_sec = 4;
+
+  double inter_arrival_avg = 5;
+
+  // payload_size_kb is the size of the post's media payload; 0 for
+  // text-only posts.
+  double payload_size_kb = 6;
+
+  // query_type is "text_post" or "media_post".
+  string query_type = 7;
+}
+
+// DecisionResponse carries the ML service's admission decision for
+// one cache-miss.
+message DecisionResponse {
+  // admit indicates whether the Go service should cache this value.
+  bool admit = 1;
+
+  // ttl_ms is how long, in milliseconds, the cached value should be
+  // considered valid, if admit is true.
+  int64 ttl_ms = 2;
+
+  // source identifies what produced this decision.
+  string source = 3;
+}
