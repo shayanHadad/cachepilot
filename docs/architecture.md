@@ -218,3 +218,59 @@ adding explicit deletion to the `Cache` interface and wiring TTL
 through every policy implementation — a larger change than
 currently justified. Revisit if evaluation runs show this skewing
 capacity-pressure results under the "ml" policy.
+
+---
+
+## Narrowed Scope of `ml_decision.go`; gRPC Client Design
+
+### Decision
+
+`internal/cache/ml_decision.go` no longer holds a standalone decision
+struct — that responsibility moved into `Features`/`Decider` in
+`manager.go` once those types were defined directly in the `cache`
+package. What remains in `ml_decision.go` is narrower but still
+useful: two conversion functions (`ToDecisionRequest`,
+`FromDecisionResponse`) that translate between this package's own
+types and the generated gRPC wire types. `internal/mlclient` calls
+only these two functions and never touches the wire types' fields
+directly.
+
+The gRPC client itself (`internal/mlclient/grpc_client.go`) is
+intentionally thin: it owns the connection and the RPC call, and
+nothing else. It connects without TLS (see the corresponding entry in
+`rejected-alternatives.md`) and uses the current lazy-connect client
+constructor, meaning a successful client construction does not
+guarantee the ML service is reachable — the first real connection
+attempt happens on the first RPC call, so "service unavailable"
+surfaces there, not at startup.
+
+### Why
+
+Keeping the wire-format conversion logic in one file
+(`ml_decision.go`), separate from both the transport code
+(`grpc_client.go`) and the orchestration code (`manager.go`), means a
+future change to the `.proto` contract (a renamed or added field)
+only requires touching one file. It also keeps `manager.go` and
+`grpc_client.go` free of any direct dependency on the generated
+`decisionpb` types outside that single conversion boundary.
+
+---
+
+## Interface Fix: `Decider.Decide` Also Takes the Key
+
+### Decision
+
+`cache.Decider.Decide` takes `(ctx, key, features)`, not just
+`(ctx, features)`.
+
+### Why
+
+The `DecisionRequest` wire message includes the post's key, purely so
+the ML service can log/trace a decision back to a specific key on its
+own side — the model itself never uses it as an input feature. This
+was missed when `Decider` was first drafted (which only threaded
+`Features` through) and caught while wiring up the real gRPC client,
+which had no way to populate that field without it. Fixed by adding
+`key` as an explicit parameter to `Decide`, rather than folding it
+into `Features`, to keep `Features` meaning exactly one thing: the
+model's actual inputs.

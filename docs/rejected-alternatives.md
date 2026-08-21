@@ -48,4 +48,13 @@ measurable problem.
 
 ---
 
-<!-- Add subsequent entries here, below this line -->
+- **TLS on the Go ↔ ML service gRPC connection** — rejected in favor
+  of a plain, unencrypted connection. Reasons: the connection is only
+  ever made over the internal docker-compose network, never a public
+  one, so TLS's threat model (network eavesdropping, server
+  impersonation) doesn't apply; the added handshake cost also isn't
+  worth paying on a path with a strict 5-10ms budget. Revisit
+  condition: if the Go and ML services are ever deployed on separate,
+  untrusted networks instead of a single docker-compose stack — at
+  that point this decision should be re-evaluated from scratch, not
+  just patched.
