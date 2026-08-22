@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"gopkg.in/yaml.v3"
@@ -67,7 +68,7 @@ var defaults = Config{
 		TimeoutMs: 8,
 	},
 	Logging: LoggingConfig{
-		Path: "data/raw_logs/service.jsonl",
+		Path: "../data/raw_logs/service.jsonl",
 	},
 }
 
@@ -88,12 +89,53 @@ func Load(path string) (*Config, error) {
 
 	applyEnvOverrides(&cfg)
 
+	cfg.Logging.Path = resolveRelativeTo(path, cfg.Logging.Path)
+
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config: invalid configuration: %w", err)
 	}
 
 	return &cfg, nil
 }
+
+// resolveRelativeTo turns target into an absolute path. If target is
+// already absolute, it's returned unchanged. Otherwise it's resolved
+// relative to the directory containing configPath, not relative to
+// the process's current working directory.
+func resolveRelativeTo(configPath, target string) string {
+	if filepath.IsAbs(target) {
+		return target
+	}
+	return filepath.Join(filepath.Dir(configPath), target)
+}
+
+/* ============================================================
+DEV NOTE (safe to delete — for learning purposes only)
+
+Why resolve logging.path relative to config.yaml's own location
+instead of just leaving it as-is (relative to the current working
+directory)?
+
+  - A relative path like "../data/raw_logs/service.jsonl" only means
+    what you think it means if the process happens to be started
+    from a specific directory. Run `go run ./cmd/server` from inside
+    go-cache-service/, and cwd is go-cache-service/ — the log file
+    ends up at go-cache-service/data/raw_logs/. Run the exact same
+    binary from the repo root, or from inside an IDE that changes the
+    working directory, or from inside a Docker container with a
+    different WORKDIR, and the same "relative" path resolves
+    somewhere completely different. This is exactly the bug that was
+    hit during manual testing.
+  - Resolving relative to the config file's own path instead removes
+    that dependency entirely: no matter where you run the binary
+    from, as long as you pass the same path to config.Load(), the log
+    file always ends up in the same place relative to config.yaml.
+    "Where do I run this from" stops being a variable that changes
+    behavior.
+  - This only had to be applied to logging.path today because it's
+    the only field in Config that's a filesystem path. If more path
+    fields get added later, run them through resolveRelativeTo too.
+============================================================ */
 
 // applyEnvOverrides overrides any field with the value of its
 // corresponding CACHEPILOT_* environment variable, if set. This lets

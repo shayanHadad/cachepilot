@@ -23,4 +23,4 @@ mlservice:
   timeout_ms: 8
 
 logging:
-  path: "data/raw_logs/service.jsonl"
+  path: "../data/raw_logs/service.jsonl"
