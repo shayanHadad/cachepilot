@@ -307,3 +307,70 @@ in both cases — the only variable being measured is whether the
 admission/TTL layer improves on always-admit-no-TTL. This is a
 meaningful nuance to state plainly rather than let a reader assume
 the ML policy replaced LRU entirely.
+
+---
+
+## Periodic Log Flushing
+
+### Problem found during manual testing
+
+The logger originally only flushed its buffered writer inside
+`Close()`. That meant `data/raw_logs/service.jsonl` stayed empty for
+the entire time the service was running — data only reached disk on
+a clean shutdown. A crash (as opposed to a graceful Ctrl+C) would
+have lost every log entry written since the process started, not
+just whatever was in the buffer at that moment.
+
+### Fix
+
+The writer goroutine now also flushes on a 1-second ticker,
+independent of `Close()`. Since `bufio.Writer` isn't safe for
+concurrent use, the periodic flush had to happen on the _same_
+goroutine that does all the writing — this ruled out simply spinning
+up a second goroutine that calls `Flush()` on its own timer, since
+that would race with in-progress writes. Instead, the writer
+goroutine's loop now uses `select` over both the entries channel and
+the ticker, rather than a plain `for range` over the channel alone.
+
+### What this does and doesn't fix
+
+This bounds the maximum data loss on a crash to roughly one second's
+worth of log entries, down from "everything since the process
+started." It does not make logging fully crash-safe — anything
+written since the last flush is still only in memory until the next
+tick. For this project's purposes (training/evaluation data, not a
+transactional log), that's considered an acceptable trade-off,
+consistent with the drop-on-full policy documented earlier in this
+file.
+
+---
+
+## Config Paths Resolve Relative to the Config File, Not the Working Directory
+
+### Problem found during manual testing
+
+`logging.path` in `config.yaml` was a relative path
+(`data/raw_logs/service.jsonl`). Relative paths are resolved against
+the process's current working directory — so running the service
+from inside `go-cache-service/` put the log file at
+`go-cache-service/data/raw_logs/`, while running it from the repo
+root would have put it somewhere else entirely. This silently broke
+the assumption (used throughout the rest of the project, e.g. the
+data pipeline) that logs always live at `<repo root>/data/raw_logs/`.
+
+### Fix
+
+`config.Load()` now resolves any relative path fields (currently just
+`logging.path`) against the directory containing the config file
+itself, not against the working directory the process happens to be
+started from. `config.yaml` was updated accordingly
+(`../data/raw_logs/service.jsonl`, since the config file lives one
+level down inside `go-cache-service/`).
+
+### Why this matters beyond just fixing the immediate bug
+
+This removes an entire class of "works on my machine" failure: the
+log file's location no longer depends on which directory a command
+happens to be run from — a shell script, an IDE run configuration, or
+a future Docker `WORKDIR` can all differ without breaking anything,
+as long as the same config file path is passed to `config.Load()`.
