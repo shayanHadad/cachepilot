@@ -59,6 +59,15 @@ class BurstState:
     rather than on every single request — recomputing a weights array
     of size n on every request would get expensive for large post
     counts at high request rates.
+
+    Burst candidates are restricted to posts that have been idle for
+    at least burst_min_idle_sec (see maybe_start_burst). Earlier this
+    picked any random post, which meant a "burst" could land on a
+    post that was already naturally hot — that has basically no
+    effect, since a hot post wasn't at risk of eviction to begin with.
+    Requiring idle time first is what actually models the scenario
+    this project cares about: a previously cold post suddenly going
+    viral.
     """
 
     def __init__(self, base_weights: np.ndarray, cfg: WorkloadConfig, rng: np.random.Generator):
@@ -68,20 +77,33 @@ class BurstState:
         self.active: dict[int, float] = {}  # post index -> end_time (unix seconds)
         self._weights = base_weights
         self._dirty = False
+        # -inf means "never requested yet", which is trivially >=
+        # burst_min_idle_sec idle — a post that hasn't been touched
+        # at all is at least as eligible as one that's merely been
+        # quiet for a while.
+        self.last_access = np.full(base_weights.shape[0], -np.inf)
+
+    def record_access(self, idx: int, now: float) -> None:
+        """Call this every time a key is actually requested, so idle
+        time is tracked for every post, not just ones that have
+        bursted before."""
+        self.last_access[idx] = now
 
     def maybe_start_burst(self, now: float, n: int) -> int | None:
         """With probability cfg.burst_rate per second, start a new
-        burst on a random post not already bursting. Returns the
-        started post's index, or None if no burst started."""
-        # Convert the per-second rate into a per-request probability
-        # using the configured request rate, so burst_rate keeps the
-        # same meaning ("expected bursts per second of wall-clock
-        # time") regardless of how fast requests are being sent.
+        burst on a random post that (a) isn't already bursting and
+        (b) has been idle for at least cfg.burst_min_idle_sec —
+        modeling a previously cold post suddenly going viral, not an
+        already-hot post getting even hotter. Returns the started
+        post's index, or None if no burst started (including the case
+        where no idle-enough candidate currently exists)."""
         p_per_request = self.cfg.burst_rate / max(self.cfg.requests_per_sec, 1e-9)
         if self.rng.random() >= p_per_request:
             return None
 
-        candidates = [i for i in range(n) if i not in self.active]
+        idle_for = now - self.last_access
+        eligible = idle_for >= self.cfg.burst_min_idle_sec
+        candidates = [i for i in range(n) if eligible[i] and i not in self.active]
         if not candidates:
             return None
 
@@ -151,6 +173,7 @@ def run_workload(cfg: WorkloadConfig) -> None:
         weights = burst.weights() if cfg.enable_burst else base_weights
         idx = rng.choice(n, p=weights)
         key = post_ids[idx]
+        burst.record_access(idx, now)
 
         req_start = time.monotonic()
         try:
