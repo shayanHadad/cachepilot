@@ -58,3 +58,43 @@ measurable problem.
   untrusted networks instead of a single docker-compose stack — at
   that point this decision should be re-evaluated from scratch, not
   just patched.
+
+---
+
+## Writing the Workload Generator in Go Instead of Python
+
+**Date:** during workload-generator implementation
+
+**Rejected alternative:** Writing the request generator (Zipfian
+sampling, rate limiting, burst injection) in Go instead of Python.
+
+**Why it was considered:** Go's timing precision for rate limiting is
+generally better than Python's (no GIL/GC-related jitter), and Go's
+goroutines scale to high concurrent request rates more naturally than
+Python's threading/asyncio model — relevant if request rates need to
+go much higher during later benchmarking.
+
+**Why it was rejected:**
+
+- The rest of the offline pipeline (`data-pipeline/`, `evaluation/`,
+  `analysis/`) is entirely Python; keeping the generator in Python
+  keeps every script that reads/writes the same JSONL files in one
+  language, rather than splitting the toolchain for no immediate
+  benefit.
+- Python's `numpy`/`pandas` ecosystem makes implementing and later
+  extending the statistical side (Zipfian sampling, and any future
+  distributions) meaningfully less work than reimplementing the same
+  logic in Go.
+- At the request rates actually used during development (tens of
+  requests/second), Python's timing precision — using
+  `time.monotonic()`-based absolute scheduling rather than naive
+  accumulated `sleep()` calls — is more than sufficient; Go's timing
+  advantage only matters at rates far higher than what this project
+  currently generates.
+
+**Revisit if:** final benchmark runs need request rates high enough
+(likely in the thousands per second) that the generator's own timing
+overhead starts measurably affecting latency results. At that point,
+a separate Go-based generator built specifically for the final
+high-rate benchmark run — not a full rewrite of the development-time
+generator — would be the narrower, lower-risk option.
