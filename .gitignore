@@ -1,1 +1,5 @@
-arc.*
+arc.md
+scripts/
+data/
+__pycache__/
+*.pyc
