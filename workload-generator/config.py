@@ -1,6 +1,9 @@
 """
-Configuration for the workload generator.
+Config for the workload generator.
 
+Plain dataclass instead of YAML, unlike the Go service — this script
+gets re-run with different flags for every experiment, so CLI
+overrides make more sense than editing a shared file each time.
 """
 
 from dataclasses import dataclass
@@ -8,35 +11,34 @@ from dataclasses import dataclass
 
 @dataclass
 class WorkloadConfig:
-    # Where to find the posts to build requests from, and where to
-    # send those requests.
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_db: str = "cachepilot"
     service_url: str = "http://localhost:8080"
 
-    # Zipfian access pattern. Higher zipf_param means a smaller
-    # number of posts absorb a much larger share of requests
+    # Higher = more skewed (a few posts hog most of the traffic).
+    # 1.0-1.5 is a typical range for modeling popularity skew.
     zipf_param: float = 1.2
 
-    # How much traffic to generate.
     total_requests: int = 10000
     requests_per_sec: float = 50.0
 
-    # Fixed seed so a run can be reproduced exactly later
+    # Fixed seed for reproducible runs — log this in experiment-log.md.
     seed: int = 42
 
-    # Burst simulation — off by default
+    # Off by default (see docs/architecture.md for why it's a toggle).
     enable_burst: bool = False
-    # Probability, per second, that a new burst starts.
-    burst_rate: float = 0.02
-    # How many times more likely a bursting key is to be picked,
-    # relative to its normal Zipfian weight.
-    burst_intensity: float = 5.0
+    burst_rate: float = 0.02       # chance per second a new burst starts
+    burst_intensity: float = 5.0   # weight multiplier while bursting
     burst_duration_sec: float = 30.0
-    # A key only becomes eligible to burst once it's gone at least
-    # this long without being requested 
+    # A post has to sit idle this long before it's eligible to burst —
+    # otherwise "burst" could just re-hit an already-hot post, which
+    # wouldn't tell us anything (see zipfian_generator.py).
     burst_min_idle_sec: float = 10.0
 
-    # Where per-request results and burst ground truth get written.
-    results_path: str = "../data/raw_logs/workload_results.jsonl"
-    burst_ground_truth_path: str = "../data/raw_logs/burst_ground_truth.jsonl"
+    # Each run writes to its own timestamped folder under this root
+    # (see create_run_dir), so runs never clobber each other.
+    output_root: str = "../data/raw_logs"
+
+    # The Go service's own log — copied into the run folder at the
+    # end so everything from one run lives in one place.
+    go_service_log_path: str = "../data/raw_logs/service.jsonl"

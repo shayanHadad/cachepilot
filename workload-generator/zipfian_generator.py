@@ -1,10 +1,11 @@
 """
-Generates a request workload against the go-cache-service, following
-a Zipfian access distribution over real post ids pulled from MongoDB,
-with an optional toggleable "burst" mode where a few posts
-temporarily become much hotter than their normal Zipfian weight would
-suggest (see docs/architecture.md for why this is a flag, not
-always-on).
+Sends a Zipfian-distributed request workload at go-cache-service,
+using real post ids from MongoDB. Burst mode is optional — when on, a
+few idle posts randomly spike in popularity for a while (see
+docs/architecture.md for why this is a toggle, not always-on).
+
+Each run gets its own timestamped folder with results, config, and a
+snapshot of the Go service's log — see create_run_dir.
 
 Usage:
     pip install pymongo numpy requests --break-system-packages
@@ -14,6 +15,7 @@ Usage:
 
 import argparse
 import json
+import shutil
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -26,9 +28,7 @@ from config import WorkloadConfig
 
 
 def load_post_ids(mongo_uri: str, db_name: str) -> list[str]:
-    """Pulls every post _id from MongoDB, as hex strings — these are
-    the only valid keys the service can actually serve, so the
-    workload has to be built from real data, not made-up ids."""
+    """All post ids in Mongo — the only valid keys the service can serve."""
     client = MongoClient(mongo_uri)
     ids = [str(doc["_id"]) for doc in client[db_name]["posts"].find({}, {"_id": 1})]
     if not ids:
@@ -39,14 +39,13 @@ def load_post_ids(mongo_uri: str, db_name: str) -> list[str]:
 
 
 def zipfian_weights(n: int, s: float) -> np.ndarray:
-    """Builds a normalized probability array of length n following
-    Zipf's law: rank 1 is the most popular, weight ~ 1/rank^s.
+    """Normalized probability array of length n: rank 1 is most
+    popular, weight ~ 1/rank^s.
 
-    Using numpy.random.zipf directly isn't a good fit here because
-    its support is unbounded (it can return ranks far larger than the
-    number of posts that actually exist) — building our own bounded,
-    normalized array and sampling with np.random.choice keeps every
-    sampled rank mapped to a real post id.
+    Not using numpy.random.zipf directly because its range is
+    unbounded — it could hand back a rank higher than we actually
+    have posts for. Building our own bounded array keeps every
+    sampled rank mapped to a real post.
     """
     ranks = np.arange(1, n + 1)
     weights = 1.0 / np.power(ranks, s)
@@ -54,49 +53,32 @@ def zipfian_weights(n: int, s: float) -> np.ndarray:
 
 
 class BurstState:
-    """Tracks which post indices are currently "bursting" and
-    recomputes sampling weights only when that set actually changes,
-    rather than on every single request — recomputing a weights array
-    of size n on every request would get expensive for large post
-    counts at high request rates.
+    """Tracks which posts are currently bursting.
 
-    Burst candidates are restricted to posts that have been idle for
-    at least burst_min_idle_sec (see maybe_start_burst). Earlier this
-    picked any random post, which meant a "burst" could land on a
-    post that was already naturally hot — that has basically no
-    effect, since a hot post wasn't at risk of eviction to begin with.
-    Requiring idle time first is what actually models the scenario
-    this project cares about: a previously cold post suddenly going
-    viral.
+    Candidates for a new burst have to be idle for a while first
+    (see maybe_start_burst) — picking any random post used to mean a
+    "burst" could land on something already hot, which barely
+    changes anything since a hot post wasn't at risk of eviction
+    anyway. Idle-first is what actually models a cold post suddenly
+    going viral.
     """
 
     def __init__(self, base_weights: np.ndarray, cfg: WorkloadConfig, rng: np.random.Generator):
         self.base_weights = base_weights
         self.cfg = cfg
         self.rng = rng
-        self.active: dict[int, float] = {}  # post index -> end_time (unix seconds)
+        self.active: dict[int, float] = {}  # post index -> burst end time
         self._weights = base_weights
         self._dirty = False
-        # -inf means "never requested yet", which is trivially >=
-        # burst_min_idle_sec idle — a post that hasn't been touched
-        # at all is at least as eligible as one that's merely been
-        # quiet for a while.
+        # -inf = never requested, which counts as idle from the start.
         self.last_access = np.full(base_weights.shape[0], -np.inf)
 
     def record_access(self, idx: int, now: float) -> None:
-        """Call this every time a key is actually requested, so idle
-        time is tracked for every post, not just ones that have
-        bursted before."""
         self.last_access[idx] = now
 
     def maybe_start_burst(self, now: float, n: int) -> int | None:
-        """With probability cfg.burst_rate per second, start a new
-        burst on a random post that (a) isn't already bursting and
-        (b) has been idle for at least cfg.burst_min_idle_sec —
-        modeling a previously cold post suddenly going viral, not an
-        already-hot post getting even hotter. Returns the started
-        post's index, or None if no burst started (including the case
-        where no idle-enough candidate currently exists)."""
+        """Rolls the dice for a new burst; if one starts, picks an
+        idle-enough post and returns its index."""
         p_per_request = self.cfg.burst_rate / max(self.cfg.requests_per_sec, 1e-9)
         if self.rng.random() >= p_per_request:
             return None
@@ -120,8 +102,8 @@ class BurstState:
             self._dirty = True
 
     def weights(self) -> np.ndarray:
-        """Returns the current sampling weights, recomputing them
-        only if the active burst set changed since the last call."""
+        """Current sampling weights, recomputed only when the active
+        burst set actually changed."""
         if self._dirty:
             w = self.base_weights.copy()
             for idx in self.active:
@@ -129,6 +111,26 @@ class BurstState:
             self._weights = w / w.sum()
             self._dirty = False
         return self._weights
+
+
+def create_run_dir(cfg: WorkloadConfig) -> Path:
+    """Makes a fresh, uniquely named output folder for this run
+    (timestamp + burst on/off), so runs never overwrite each other —
+    no more manually mv-ing files between runs."""
+    timestamp = time.strftime("%Y-%m-%d_%H%M%S")
+    tag = "burst" if cfg.enable_burst else "normal"
+    run_dir = Path(cfg.output_root) / f"run_{timestamp}_{tag}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+def write_run_metadata(run_dir: Path, cfg: WorkloadConfig) -> None:
+    """Dumps every parameter for this run to run_config.json, so
+    nobody has to remember what flags produced a given result."""
+    metadata = asdict(cfg)
+    metadata["run_started_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    with open(run_dir / "run_config.json", "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
 
 
 def run_workload(cfg: WorkloadConfig) -> None:
@@ -141,13 +143,15 @@ def run_workload(cfg: WorkloadConfig) -> None:
     base_weights = zipfian_weights(n, cfg.zipf_param)
     burst = BurstState(base_weights, cfg, rng)
 
-    Path(cfg.results_path).parent.mkdir(parents=True, exist_ok=True)
-    results_file = open(cfg.results_path, "a", encoding="utf-8")
+    run_dir = create_run_dir(cfg)
+    write_run_metadata(run_dir, cfg)
+    print(f"Run output directory: {run_dir}")
+
+    results_file = open(run_dir / "results.jsonl", "a", encoding="utf-8")
 
     burst_gt_file = None
     if cfg.enable_burst:
-        Path(cfg.burst_ground_truth_path).parent.mkdir(parents=True, exist_ok=True)
-        burst_gt_file = open(cfg.burst_ground_truth_path, "a", encoding="utf-8")
+        burst_gt_file = open(run_dir / "burst_ground_truth.jsonl", "a", encoding="utf-8")
 
     successes = 0
     failures = 0
@@ -156,6 +160,8 @@ def run_workload(cfg: WorkloadConfig) -> None:
     start_time = time.monotonic()
     print(f"Starting workload: {cfg.total_requests} requests at {cfg.requests_per_sec}/s "
           f"(burst={'on' if cfg.enable_burst else 'off'})")
+
+    progress_every = max(cfg.total_requests // 10, 1)
 
     for i in range(cfg.total_requests):
         now = time.monotonic()
@@ -196,11 +202,12 @@ def run_workload(cfg: WorkloadConfig) -> None:
             "is_burst": cfg.enable_burst and idx in burst.active,
         }) + "\n")
 
-        # Pace requests to the target rate by sleeping until the
-        # scheduled time for the *next* request, rather than a fixed
-        # sleep(1/rate) after each one — the fixed-sleep approach
-        # accumulates drift over many iterations because it ignores
-        # how long the request itself took.
+        if (i + 1) % progress_every == 0:
+            print(f"  [{i + 1}/{cfg.total_requests}] requests sent")
+
+        # Sleep until the *scheduled* time for the next request
+        # (not just sleep(1/rate) after each one) so timing doesn't
+        # drift over the course of a long run.
         next_request_at = start_time + (i + 1) / cfg.requests_per_sec
         sleep_for = next_request_at - time.monotonic()
         if sleep_for > 0:
@@ -210,17 +217,30 @@ def run_workload(cfg: WorkloadConfig) -> None:
     if burst_gt_file is not None:
         burst_gt_file.close()
 
+    # Snapshot (copy, not move — the service might still be writing
+    # to it) the Go service's log into this run's folder too.
+    service_log = Path(cfg.go_service_log_path)
+    if service_log.exists():
+        shutil.copy2(service_log, run_dir / "service.jsonl")
+    else:
+        print(f"Warning: {service_log} not found — skipping service log snapshot. "
+              f"Is the go-cache-service running with a matching logging.path?")
+
     elapsed = time.monotonic() - start_time
-    avg_latency = sum(latencies_ms) / len(latencies_ms) if latencies_ms else 0.0
     print("\n--- Workload summary ---")
     print(f"Total requests:   {cfg.total_requests}")
     print(f"Successes:        {successes}")
     print(f"Failures:         {failures}")
     print(f"Elapsed:          {elapsed:.1f}s")
-    print(f"Avg latency:      {avg_latency:.2f}ms")
-    print(f"Results written:  {cfg.results_path}")
-    if cfg.enable_burst:
-        print(f"Burst ground truth: {cfg.burst_ground_truth_path}")
+
+    if latencies_ms:
+        p50, p95, p99 = np.percentile(latencies_ms, [50, 95, 99])
+        avg = sum(latencies_ms) / len(latencies_ms)
+        print(f"Latency avg/p50/p95/p99: {avg:.2f} / {p50:.2f} / {p95:.2f} / {p99:.2f} ms")
+    else:
+        print("Latency: no successful requests recorded")
+
+    print(f"\nAll output for this run: {run_dir}")
 
 
 def parse_args() -> WorkloadConfig:
@@ -229,10 +249,9 @@ def parse_args() -> WorkloadConfig:
     for field, default in asdict(defaults).items():
         flag = "--" + field.replace("_", "-")
         if isinstance(default, bool):
-            # Only enable_burst is boolean today, and it defaults to
-            # False, so a simple store_true flag is enough — this
-            # would need to be more general if a bool field defaulting
-            # to True is ever added.
+            # Only enable_burst is bool today and it defaults to
+            # False — revisit this if a bool defaulting to True
+            # ever gets added.
             parser.add_argument(flag, action="store_true")
         else:
             parser.add_argument(flag, type=type(default), default=default)
