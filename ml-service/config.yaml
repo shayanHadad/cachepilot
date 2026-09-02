@@ -1,0 +1,6 @@
+# CachePilot — ml-service configuration
+#
+# grpc_addr must match go-cache-service/config.yaml's
+# mlservice.grpc_addr for the two services to actually find each
+# other.
+grpc_addr: "0.0.0.0:50051"
