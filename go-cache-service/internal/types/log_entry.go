@@ -33,11 +33,19 @@ type LogEntry struct {
 
 	// QueryType classifies the requested post: "text_post" or "media_post".
 	QueryType string `json:"query_type"`
+
+	// Source identifies what actually produced this outcome: "cache-hit"
+	// for any hit, the policy name ("lru"/"lfu") for a baseline miss,
+	// or the decider's own source ("heuristic-v1", "fallback-lru",
+	// or a future model name) for an "ml" policy miss. Lets
+	// evaluation code count exactly how often decisions actually
+	// came from the ML service vs. fell back.
+	Source string `json:"source"`
 }
 
 // NewLogEntry builds a LogEntry, converting the given time.Time to
 // Unix milliseconds.
-func NewLogEntry(ts time.Time, key string, status CacheStatus, latencyMs float64, responseSize int, queryType string) LogEntry {
+func NewLogEntry(ts time.Time, key string, status CacheStatus, latencyMs float64, responseSize int, queryType string, source string) LogEntry {
 	return LogEntry{
 		Timestamp:    ts.UnixMilli(),
 		Key:          key,
@@ -45,5 +53,6 @@ func NewLogEntry(ts time.Time, key string, status CacheStatus, latencyMs float64
 		LatencyMs:    latencyMs,
 		ResponseSize: responseSize,
 		QueryType:    queryType,
+		Source:       source,
 	}
 }

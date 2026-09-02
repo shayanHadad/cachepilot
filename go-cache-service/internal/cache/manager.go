@@ -120,9 +120,11 @@ func (m *Manager) Get(ctx context.Context, key string) ([]byte, error) {
 	}
 
 	status := types.StatusMiss
+	var source string
 	if hit {
 		status = types.StatusHit
 		m.hits.Add(1)
+		source = "cache-hit"
 	} else {
 		fetched, err := m.store.GetPost(ctx, key)
 		if err != nil {
@@ -130,22 +132,26 @@ func (m *Manager) Get(ctx context.Context, key string) ([]byte, error) {
 		}
 		value = fetched
 		m.misses.Add(1)
-		m.admit(ctx, key, value, stats, start)
+		source = m.admit(ctx, key, value, stats, start)
 	}
 
 	meta := decodeMeta(value)
 	latencyMs := float64(time.Since(start).Microseconds()) / 1000.0
-	m.logger.Log(types.NewLogEntry(start, key, status, latencyMs, len(value), meta.QueryType))
+	m.logger.Log(types.NewLogEntry(start, key, status, latencyMs, len(value), meta.QueryType, source))
 
 	return value, nil
 }
 
 // admit applies the configured policy's admission rule to a freshly
-// fetched value. Only called on a miss.
-func (m *Manager) admit(ctx context.Context, key string, value []byte, stats features.WindowStats, now time.Time) {
+// fetched value. Only called on a miss. Returns a string identifying
+// what made the decision — the policy name for lru/lfu, or the
+// decider's own source for ml (see LogEntry.Source) — so the caller
+// can log it.
+func (m *Manager) admit(ctx context.Context, key string, value []byte, stats features.WindowStats, now time.Time) string {
 	switch m.policy {
 	case "lru", "lfu":
 		m.cache.Put(key, value)
+		return m.policy
 
 	case "ml":
 		meta := decodeMeta(value)
@@ -159,14 +165,16 @@ func (m *Manager) admit(ctx context.Context, key string, value []byte, stats fea
 		}
 
 		decision := m.decide(ctx, key, feat)
-		if !decision.Admit {
-			return
+		if decision.Admit {
+			m.cache.Put(key, value)
+			if decision.TTL > 0 {
+				m.setExpiry(key, now.Add(decision.TTL))
+			}
 		}
+		return decision.Source
 
-		m.cache.Put(key, value)
-		if decision.TTL > 0 {
-			m.setExpiry(key, now.Add(decision.TTL))
-		}
+	default:
+		return "unknown"
 	}
 }
 
