@@ -374,3 +374,107 @@ log file's location no longer depends on which directory a command
 happens to be run from — a shell script, an IDE run configuration, or
 a future Docker `WORKDIR` can all differ without breaking anything,
 as long as the same config file path is passed to `config.Load()`.
+
+---
+
+## Burst Candidates Must Be Idle First
+
+### Problem found during manual testing
+
+The workload generator's burst injection originally picked any
+random post to burst, with no regard for whether that post was
+already naturally hot. In practice this meant a "burst" frequently
+landed on a post that was already being requested often — which has
+almost no measurable effect, since a post that's already hot wasn't
+at risk of eviction to begin with. A manual A/B test (normal vs.
+burst workload) showed close to zero difference in hit rate or
+latency, which is what surfaced this.
+
+### Fix
+
+`BurstState` now tracks each post's last-access time. A post only
+becomes eligible to start a new burst once it's gone at least
+`burst_min_idle_sec` seconds without being requested (or has never
+been requested at all). This is what actually models the scenario
+the project cares about: a previously cold post suddenly going
+viral — not an already-popular post getting a bit more popular.
+
+### Why this is a general rule, not a one-off fix
+
+`burst_min_idle_sec` is a config parameter, not a hardcoded
+threshold, and the eligibility check works the same way regardless of
+dataset size, Zipfian parameter, or request rate. The underlying rule
+("only idle keys can burst") is what matters methodologically, not
+any specific value chosen for a particular test run.
+
+---
+
+## Logging Which Policy Actually Produced Each Response
+
+### Problem
+
+`LogEntry` originally only recorded hit/miss, not _why_ — for the
+"ml" policy specifically, there was no way to tell from the log alone
+whether a given response was actually decided by the ML service, or
+by the fallback path (when the ML service is slow or unavailable).
+Since the fallback behaves like a working response (the request still
+succeeds), this distinction was invisible from the outside without
+watching the service's stdout in real time.
+
+### Decision
+
+Added a `Source` field to `LogEntry`. Its value depends on how the
+response was produced:
+
+- `"cache-hit"` for any cache hit, regardless of policy — no
+  admission decision was made, the value was already sitting in the
+  cache.
+- The policy name (`"lru"` or `"lfu"`) for a miss under a baseline
+  policy — there's no separate decision-maker to distinguish there.
+- The decider's own reported source for a miss under the "ml"
+  policy — either whatever the ML service returns (`"heuristic-v1"`
+  today, a model identifier later) or `"fallback-lru"` if the gRPC
+  call failed or timed out.
+
+`Manager.admit()` was changed to return this source string instead of
+nothing, so `Manager.Get()` can pass it straight into the log entry.
+
+### Why this matters for evaluation
+
+Average hit rate and latency alone can't answer "how often did the ML
+service actually make the call, versus falling back?" — which
+directly affects how any measured improvement should be interpreted.
+With `Source` in every log line, that split can be computed directly
+from `data/raw_logs/service.jsonl` without any additional
+instrumentation.
+
+---
+
+## Splitting the ML Service's gRPC Server from Its Decision Logic
+
+### Decision
+
+`ml-service/server/grpc_server.py` only translates between the gRPC
+wire format and a single function call, `model.inference.decide()`.
+It has no admission-rule logic of its own. Today, `decide()` is a
+simple heuristic (admit if requested at least once in the last
+minute, flat 5-minute TTL) — not a trained model yet, since the
+training data pipeline doesn't exist yet.
+
+### Why
+
+This split means the eventual trained model can replace the
+heuristic by changing only `inference.py` — `grpc_server.py` doesn't
+need to change at all, since it was never written to know or care
+what's behind `decide()`. This mirrors the same interface-first
+approach used on the Go side (`cache.Decider`): the transport layer
+and the decision logic are separate concerns, developed and testable
+independently.
+
+### Why start with a real heuristic instead of a stub
+
+The heuristic isn't a placeholder that always returns the same
+answer — it's a real (if simple) admission rule. This let the full
+Go-to-ML gRPC path be tested end to end immediately, without waiting
+for `data-pipeline/` and `model/train.py` to exist first, while still
+producing meaningful (not arbitrary) cache behavior in the meantime.
