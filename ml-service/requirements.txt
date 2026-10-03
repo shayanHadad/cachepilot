@@ -2,3 +2,7 @@ grpcio==1.68.1
 grpcio-tools==1.68.1
 protobuf==5.29.3
 pyyaml==6.0.2
+lightgbm==4.5.0
+scikit-learn==1.5.2
+pandas==2.2.3
+pyarrow==18.1.0
