@@ -1,4 +1,14 @@
+crrnt.md
+gnrl.md
+t.md
 arc.md
 data/
 __pycache__/
 *.pyc
+
+# ML model artifacts (reproducible, not source)
+ml-service/model/artifacts/
+
+# Debug/scratch files
+ml-service/model/tmp.py
+ml-service/model/train_log*.txt
