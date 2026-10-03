@@ -13,8 +13,8 @@ mongo:
 
 cache:
   # lru | lfu | ml
-  policy: "ml"
-  capacity: 40
+  policy: "lru"
+  capacity: 250
 
 mlservice:
   grpc_addr: "localhost:50051"
