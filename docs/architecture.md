@@ -478,3 +478,56 @@ answer — it's a real (if simple) admission rule. This let the full
 Go-to-ML gRPC path be tested end to end immediately, without waiting
 for `data-pipeline/` and `model/train.py` to exist first, while still
 producing meaningful (not arbitrary) cache behavior in the meantime.
+
+---
+
+## Fixing Early Stopping for the Admit Model
+
+### Problem
+
+The first working version of `model/train.py` collapsed to always
+predicting "admit," never predicting the minority "reject" class at
+all (0% precision/recall on `reject`) — despite `scale_pos_weight`
+being computed and set correctly from the training set's class
+balance. Inspecting the training log showed early stopping
+triggering at boosting iteration 1: the model was stopped after a
+single tree and never got a real chance to learn anything. Predicted
+probabilities on the test set were narrowly ranged (0.68–0.97) and
+didn't separate true-reject from true-admit examples at all.
+
+### Root cause
+
+Early stopping was watching `binary_logloss` alone, with only 20
+rounds of patience. On this heavily imbalanced target, logloss can
+behave noisily in the first few rounds, and the combination of a
+single noisy metric with low patience caused the trainer to give up
+immediately rather than let the model actually converge.
+
+### Fix
+
+Added `auc` as a second tracked metric alongside `binary_logloss`,
+raised early-stopping patience to 50 rounds, and logged every
+boosting round (instead of every 50) to make the metric trend
+visible. With this change, training ran for 83 rounds and selected
+iteration 33 as the best, with validation AUC climbing from 0.881 to
+0.894 before gradually overfitting — the kind of curve a healthy
+training run is expected to show, confirming the original 1-round
+stop was the actual bug, not a sign the task was unlearnable.
+
+A reference result from one full run (60,000 requests, zipf_param=0.9,
+5000 seeded posts, cache capacity 250): test ROC AUC 0.899, reject
+average precision 0.183 (vs. a random baseline of 0.039 — about 4.7x
+better than chance). See `docs/experiment-log.md` for the full,
+reproducible record of this run.
+
+### Side finding: not all features are equally useful
+
+A single-feature AUC check (scoring each feature alone against
+`label_admit`) showed `frequency_5min` alone (AUC 0.905) actually
+outperforms the full multi-feature model (AUC 0.894). `query_type`
+and `payload_size_kb` scored close to random (AUC ~0.51) on their
+own, and `query_type` has zero LightGBM feature importance (gain =
+0.0) in the trained model. This isn't a bug — it's a legitimate
+finding worth keeping for the evaluation writeup, and a candidate for
+a future feature-selection experiment (does dropping the near-useless
+features change anything, for better or worse).

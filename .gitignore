@@ -12,3 +12,5 @@ ml-service/model/artifacts/
 # Debug/scratch files
 ml-service/model/tmp.py
 ml-service/model/train_log*.txt
+
+*graphify*
