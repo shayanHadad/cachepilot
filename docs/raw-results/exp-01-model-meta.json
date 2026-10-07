@@ -1,0 +1,13 @@
+{
+  "best_iteration": 33,
+  "reject_score_threshold": 0.5219274602650064,
+  "scale_pos_weight": 0.0384967919340055,
+  "feature_names": [
+    "frequency_1min",
+    "frequency_5min",
+    "recency_sec",
+    "inter_arrival_avg",
+    "payload_size_kb",
+    "query_type"
+  ]
+}

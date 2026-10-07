@@ -1,0 +1,143 @@
+Loaded 23994 train rows, 5999 test rows
+Split train into 20394 fit rows, 3600 validation rows (132 reject in validation)
+scale_pos_weight: 0.038 (from fit set's class balance)
+[1]	valid_0's auc: 0.881178	valid_0's binary_logloss: 0.138595
+Training until validation scores don't improve for 50 rounds
+[2]	valid_0's auc: 0.887545	valid_0's binary_logloss: 0.136201
+[3]	valid_0's auc: 0.888146	valid_0's binary_logloss: 0.137062
+[4]	valid_0's auc: 0.888985	valid_0's binary_logloss: 0.138833
+[5]	valid_0's auc: 0.888684	valid_0's binary_logloss: 0.141231
+[6]	valid_0's auc: 0.888841	valid_0's binary_logloss: 0.144758
+[7]	valid_0's auc: 0.890462	valid_0's binary_logloss: 0.148076
+[8]	valid_0's auc: 0.891059	valid_0's binary_logloss: 0.151867
+[9]	valid_0's auc: 0.890804	valid_0's binary_logloss: 0.155692
+[10]	valid_0's auc: 0.891673	valid_0's binary_logloss: 0.159968
+[11]	valid_0's auc: 0.891804	valid_0's binary_logloss: 0.163893
+[12]	valid_0's auc: 0.891647	valid_0's binary_logloss: 0.168249
+[13]	valid_0's auc: 0.891639	valid_0's binary_logloss: 0.172328
+[14]	valid_0's auc: 0.892244	valid_0's binary_logloss: 0.176192
+[15]	valid_0's auc: 0.892156	valid_0's binary_logloss: 0.179943
+[16]	valid_0's auc: 0.892806	valid_0's binary_logloss: 0.184021
+[17]	valid_0's auc: 0.893454	valid_0's binary_logloss: 0.187553
+[18]	valid_0's auc: 0.893393	valid_0's binary_logloss: 0.191398
+[19]	valid_0's auc: 0.893438	valid_0's binary_logloss: 0.195563
+[20]	valid_0's auc: 0.893785	valid_0's binary_logloss: 0.199172
+[21]	valid_0's auc: 0.893831	valid_0's binary_logloss: 0.203227
+[22]	valid_0's auc: 0.893958	valid_0's binary_logloss: 0.206685
+[23]	valid_0's auc: 0.893978	valid_0's binary_logloss: 0.210598
+[24]	valid_0's auc: 0.894081	valid_0's binary_logloss: 0.214061
+[25]	valid_0's auc: 0.894073	valid_0's binary_logloss: 0.217155
+[26]	valid_0's auc: 0.894155	valid_0's binary_logloss: 0.220756
+[27]	valid_0's auc: 0.893986	valid_0's binary_logloss: 0.224116
+[28]	valid_0's auc: 0.89415	valid_0's binary_logloss: 0.227469
+[29]	valid_0's auc: 0.893996	valid_0's binary_logloss: 0.230602
+[30]	valid_0's auc: 0.893994	valid_0's binary_logloss: 0.233656
+[31]	valid_0's auc: 0.894137	valid_0's binary_logloss: 0.23687
+[32]	valid_0's auc: 0.894262	valid_0's binary_logloss: 0.23982
+[33]	valid_0's auc: 0.894306	valid_0's binary_logloss: 0.242943
+[34]	valid_0's auc: 0.894291	valid_0's binary_logloss: 0.245962
+[35]	valid_0's auc: 0.894138	valid_0's binary_logloss: 0.248315
+[36]	valid_0's auc: 0.893992	valid_0's binary_logloss: 0.250951
+[37]	valid_0's auc: 0.894094	valid_0's binary_logloss: 0.253208
+[38]	valid_0's auc: 0.894129	valid_0's binary_logloss: 0.255579
+[39]	valid_0's auc: 0.893821	valid_0's binary_logloss: 0.257456
+[40]	valid_0's auc: 0.88986	valid_0's binary_logloss: 0.26006
+[41]	valid_0's auc: 0.889869	valid_0's binary_logloss: 0.261918
+[42]	valid_0's auc: 0.889952	valid_0's binary_logloss: 0.263845
+[43]	valid_0's auc: 0.890008	valid_0's binary_logloss: 0.265956
+[44]	valid_0's auc: 0.890096	valid_0's binary_logloss: 0.267672
+[45]	valid_0's auc: 0.890063	valid_0's binary_logloss: 0.269309
+[46]	valid_0's auc: 0.889641	valid_0's binary_logloss: 0.270799
+[47]	valid_0's auc: 0.889104	valid_0's binary_logloss: 0.272818
+[48]	valid_0's auc: 0.889124	valid_0's binary_logloss: 0.27413
+[49]	valid_0's auc: 0.889286	valid_0's binary_logloss: 0.275878
+[50]	valid_0's auc: 0.88944	valid_0's binary_logloss: 0.276944
+[51]	valid_0's auc: 0.889349	valid_0's binary_logloss: 0.27836
+[52]	valid_0's auc: 0.889111	valid_0's binary_logloss: 0.280005
+[53]	valid_0's auc: 0.889399	valid_0's binary_logloss: 0.281122
+[54]	valid_0's auc: 0.889198	valid_0's binary_logloss: 0.282477
+[55]	valid_0's auc: 0.889146	valid_0's binary_logloss: 0.283209
+[56]	valid_0's auc: 0.888986	valid_0's binary_logloss: 0.284118
+[57]	valid_0's auc: 0.889041	valid_0's binary_logloss: 0.285418
+[58]	valid_0's auc: 0.889222	valid_0's binary_logloss: 0.285847
+[59]	valid_0's auc: 0.889036	valid_0's binary_logloss: 0.286697
+[60]	valid_0's auc: 0.88921	valid_0's binary_logloss: 0.287599
+[61]	valid_0's auc: 0.889144	valid_0's binary_logloss: 0.288401
+[62]	valid_0's auc: 0.88876	valid_0's binary_logloss: 0.289282
+[63]	valid_0's auc: 0.888933	valid_0's binary_logloss: 0.289795
+[64]	valid_0's auc: 0.889037	valid_0's binary_logloss: 0.290748
+[65]	valid_0's auc: 0.889032	valid_0's binary_logloss: 0.290863
+[66]	valid_0's auc: 0.889585	valid_0's binary_logloss: 0.291676
+[67]	valid_0's auc: 0.889611	valid_0's binary_logloss: 0.292456
+[68]	valid_0's auc: 0.889412	valid_0's binary_logloss: 0.29271
+[69]	valid_0's auc: 0.888968	valid_0's binary_logloss: 0.293045
+[70]	valid_0's auc: 0.889138	valid_0's binary_logloss: 0.293557
+[71]	valid_0's auc: 0.889153	valid_0's binary_logloss: 0.293989
+[72]	valid_0's auc: 0.8893	valid_0's binary_logloss: 0.294456
+[73]	valid_0's auc: 0.889273	valid_0's binary_logloss: 0.295098
+[74]	valid_0's auc: 0.889407	valid_0's binary_logloss: 0.295668
+[75]	valid_0's auc: 0.889728	valid_0's binary_logloss: 0.296027
+[76]	valid_0's auc: 0.89004	valid_0's binary_logloss: 0.295923
+[77]	valid_0's auc: 0.889628	valid_0's binary_logloss: 0.295613
+[78]	valid_0's auc: 0.889558	valid_0's binary_logloss: 0.296053
+[79]	valid_0's auc: 0.889189	valid_0's binary_logloss: 0.296366
+[80]	valid_0's auc: 0.889166	valid_0's binary_logloss: 0.296073
+[81]	valid_0's auc: 0.888952	valid_0's binary_logloss: 0.296063
+[82]	valid_0's auc: 0.888841	valid_0's binary_logloss: 0.296107
+[83]	valid_0's auc: 0.888834	valid_0's binary_logloss: 0.29593
+Early stopping, best iteration is:
+[33]	valid_0's auc: 0.894306	valid_0's binary_logloss: 0.242943
+Evaluated only: auc
+
+Best iteration: 33
+Selected reject-score threshold: 0.5219 (validation reject F1 = 0.2691)
+
+--- Single-feature AUC on validation (raw value as score) ---
+  full model           0.8943
+  frequency_1min       0.8647  (raw 0.8647)
+  frequency_5min       0.9046  (raw 0.9046)
+  recency_sec          0.5195  (raw 0.4805)
+  inter_arrival_avg    0.6900  (raw 0.6900)
+  payload_size_kb      0.5100  (raw 0.5100)
+
+--- Test set evaluation ---
+ROC AUC:                  0.8990
+Reject average precision: 0.1827 (random baseline = reject rate = 0.0387)
+
+Default threshold (reject if reject_score >= 0.5000)
+              precision    recall  f1-score   support
+
+      reject       0.17      0.78      0.28       232
+       admit       0.99      0.84      0.91      5767
+
+    accuracy                           0.84      5999
+   macro avg       0.58      0.81      0.59      5999
+weighted avg       0.96      0.84      0.89      5999
+
+Confusion matrix (rows=actual, cols=predicted):
+[[ 182   50]
+ [ 909 4858]]
+
+Tuned threshold (selected on validation) (reject if reject_score >= 0.5219)
+              precision    recall  f1-score   support
+
+      reject       0.17      0.78      0.28       232
+       admit       0.99      0.85      0.91      5767
+
+    accuracy                           0.85      5999
+   macro avg       0.58      0.81      0.60      5999
+weighted avg       0.96      0.85      0.89      5999
+
+Confusion matrix (rows=actual, cols=predicted):
+[[ 180   52]
+ [ 876 4891]]
+
+--- Feature importance (gain) ---
+  frequency_5min       7385.7
+  frequency_1min       691.9
+  recency_sec          413.0
+  inter_arrival_avg    345.1
+  payload_size_kb      223.1
+  query_type           0.0
+
+Saved model to artifacts/model.txt and metadata to artifacts/model_meta.json
