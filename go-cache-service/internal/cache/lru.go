@@ -72,6 +72,19 @@ func (c *lruCache) Put(key string, value []byte) {
 	}
 }
 
+// Delete removes key if present, without counting an eviction.
+func (c *lruCache) Delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	elem, ok := c.items[key]
+	if !ok {
+		return
+	}
+	c.ll.Remove(elem)
+	delete(c.items, key)
+}
+
 // evictOldest removes the least recently used entry. Caller must hold c.mu.
 func (c *lruCache) evictOldest() {
 	oldest := c.ll.Back()

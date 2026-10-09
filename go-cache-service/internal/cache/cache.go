@@ -10,6 +10,10 @@ type Cache interface {
 	// admission/eviction rules.
 	Put(key string, value []byte)
 
+	// Delete removes key if present. It is not counted as an
+	// eviction: evictions only track capacity-driven removals.
+	Delete(key string)
+
 	// Stats returns a snapshot of this cache's hit/miss/eviction counters.
 	Stats() CacheStats
 }

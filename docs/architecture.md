@@ -531,3 +531,39 @@ own, and `query_type` has zero LightGBM feature importance (gain =
 finding worth keeping for the evaluation writeup, and a candidate for
 a future feature-selection experiment (does dropping the near-useless
 features change anything, for better or worse).
+
+## Expired Entries Must Be Removed From the Cache, Not Just From the Expiry Map
+
+### Problem
+
+Under the "ml" policy, `Manager` tracked per-key expiry deadlines in a
+separate map, while the values themselves lived in the underlying LRU,
+which has no notion of TTL. The periodic cleanup only dropped deadlines
+that had passed. Once a deadline was gone, `isExpired` reported the key
+as live, so the stale value still in the LRU was served as a hit. A key
+could therefore be a logical miss before the first cleanup sweep and a
+hit after it, which inflated the hit rate of the "ml" policy relative to
+lru/lfu.
+
+### Decision
+
+Add `Delete(key)` to the `Cache` interface. `Manager` now removes the
+value together with its deadline, both when a request finds an expired
+entry and when the periodic sweep drops it. Entries admitted without a
+TTL (for example the `fallback-lru` path) also clear any older deadline
+for that key.
+
+### Why
+
+Expiry and presence of a value must not be tracked independently:
+removing only the bookkeeping silently turns "expired" into "valid".
+The failure only appears when expiry and cleanup interleave, so it was
+reproduced with a test (`TestExpiredEntryIsNotServedAsHitAfterCleanup`)
+before the fix.
+
+### Trade-offs / Limitations
+
+`Delete` is not counted as an eviction, so `Stats().Evictions` still
+means capacity-driven removals only. A concurrent re-admit can still
+lose its fresh value to a sweep in a narrow window; the cost is one
+extra miss, not a stale hit.

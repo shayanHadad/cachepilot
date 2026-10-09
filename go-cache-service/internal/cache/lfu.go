@@ -80,6 +80,39 @@ func (c *lfuCache) Put(key string, value []byte) {
 	c.minFreq = 1
 }
 
+// Delete removes key if present, without counting an eviction.
+func (c *lfuCache) Delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	elem, ok := c.items[key]
+	if !ok {
+		return
+	}
+	entry := elem.Value.(*lfuEntry)
+	lst := c.freqLists[entry.freq]
+	lst.Remove(elem)
+	if lst.Len() == 0 {
+		delete(c.freqLists, entry.freq)
+		if c.minFreq == entry.freq {
+			c.minFreq = c.lowestFreq()
+		}
+	}
+	delete(c.items, key)
+}
+
+// lowestFreq returns the smallest frequency that still has entries,
+// or 0 if the cache is empty. Caller must hold c.mu.
+func (c *lfuCache) lowestFreq() int {
+	lowest := 0
+	for freq := range c.freqLists {
+		if lowest == 0 || freq < lowest {
+			lowest = freq
+		}
+	}
+	return lowest
+}
+
 // bumpFrequency moves entry from its current frequency list to the
 // next one up, updating minFreq if the old frequency's list becomes empty
 func (c *lfuCache) bumpFrequency(elem *list.Element, entry *lfuEntry) {

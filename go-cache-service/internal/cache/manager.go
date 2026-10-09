@@ -120,6 +120,7 @@ func (m *Manager) Get(ctx context.Context, key string) ([]byte, error) {
 
 	value, hit := m.cache.Get(key)
 	if hit && m.policy == "ml" && m.isExpired(key, start) {
+		m.expire(key, start)
 		hit = false
 		value = nil
 	}
@@ -171,10 +172,14 @@ func (m *Manager) admit(ctx context.Context, key string, value []byte, stats fea
 
 		decision := m.decide(ctx, key, feat)
 		if decision.Admit {
-			m.cache.Put(key, value)
+			// The deadline is set before Put so a concurrent cleanup
+			// sweep never sees a fresh value with a stale deadline.
 			if decision.TTL > 0 {
 				m.setExpiry(key, now.Add(decision.TTL))
+			} else {
+				m.clearExpiry(key)
 			}
+			m.cache.Put(key, value)
 		}
 		return decision.Source
 
@@ -205,6 +210,14 @@ func (m *Manager) setExpiry(key string, at time.Time) {
 	m.ttlExpiry[key] = at
 }
 
+// clearExpiry drops any recorded deadline for key, for entries that
+// are admitted without a TTL.
+func (m *Manager) clearExpiry(key string) {
+	m.ttlMu.Lock()
+	defer m.ttlMu.Unlock()
+	delete(m.ttlExpiry, key)
+}
+
 // isExpired reports whether key has a recorded expiry that has
 // already passed.
 func (m *Manager) isExpired(key string, now time.Time) bool {
@@ -217,8 +230,22 @@ func (m *Manager) isExpired(key string, now time.Time) bool {
 	return now.After(exp)
 }
 
-// expiryCleanupLoop periodically drops expiry bookkeeping for keys
-// whose deadline has already passed.
+// expire removes key's value and deadline if the deadline has still
+// passed. The re-check under the lock keeps a concurrent re-admit's
+// fresh value from being dropped.
+func (m *Manager) expire(key string, now time.Time) {
+	m.ttlMu.Lock()
+	defer m.ttlMu.Unlock()
+	exp, ok := m.ttlExpiry[key]
+	if !ok || !now.After(exp) {
+		return
+	}
+	delete(m.ttlExpiry, key)
+	m.cache.Delete(key)
+}
+
+// expiryCleanupLoop periodically removes entries whose deadline has
+// already passed.
 func (m *Manager) expiryCleanupLoop(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -232,6 +259,9 @@ func (m *Manager) expiryCleanupLoop(interval time.Duration) {
 	}
 }
 
+// purgeExpired drops every expired key's value and its deadline.
+// Dropping only the deadline would leave the stale value in the
+// underlying cache, where it would be served as a hit.
 func (m *Manager) purgeExpired() {
 	now := time.Now()
 	m.ttlMu.Lock()
@@ -239,6 +269,7 @@ func (m *Manager) purgeExpired() {
 	for key, exp := range m.ttlExpiry {
 		if now.After(exp) {
 			delete(m.ttlExpiry, key)
+			m.cache.Delete(key)
 		}
 	}
 }
