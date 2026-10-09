@@ -4,3 +4,12 @@
 # mlservice.grpc_addr for the two services to actually find each
 # other.
 grpc_addr: "0.0.0.0:50051"
+
+# model     score requests with the trained model; the service refuses
+#           to start if the model file is missing or doesn't match its
+#           metadata.
+# heuristic frequency rule only, no model loaded (explicit baseline).
+decision_mode: "model"
+
+# Relative paths resolve against this file's directory.
+model_path: "model/artifacts/model.txt"
