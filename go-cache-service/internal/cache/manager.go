@@ -10,7 +10,6 @@ import (
 
 	"github.com/shayanHadad/cachepilot/internal/features"
 	"github.com/shayanHadad/cachepilot/internal/logger"
-	"github.com/shayanHadad/cachepilot/internal/store"
 	"github.com/shayanHadad/cachepilot/internal/types"
 )
 
@@ -32,13 +31,19 @@ type Decider interface {
 	Decide(ctx context.Context, key string, features Features) (types.CacheDecision, error)
 }
 
+// PostFetcher loads a post's JSON bytes by key. *store.Store
+// implements it; tests can substitute a fake.
+type PostFetcher interface {
+	GetPost(ctx context.Context, id string) ([]byte, error)
+}
+
 // Manager owns orchestration: it decides, per policy, whether a
 // cache-miss should be admitted and for how long, applies fallback
 // behavior if the ML service is slow or unavailable, and logs every
 // request.
 type Manager struct {
 	cache  Cache
-	store  *store.Store
+	posts  PostFetcher
 	logger *logger.Logger
 	policy string // "lru", "lfu", or "ml"
 
@@ -62,7 +67,7 @@ type Manager struct {
 // NewManager builds a Manager.
 func NewManager(
 	c Cache,
-	st *store.Store,
+	st PostFetcher,
 	log *logger.Logger,
 	policy string,
 	dec Decider,
@@ -85,7 +90,7 @@ func NewManager(
 
 	m := &Manager{
 		cache:     c,
-		store:     st,
+		posts:     st,
 		logger:    log,
 		policy:    policy,
 		decider:   dec,
@@ -126,7 +131,7 @@ func (m *Manager) Get(ctx context.Context, key string) ([]byte, error) {
 		m.hits.Add(1)
 		source = "cache-hit"
 	} else {
-		fetched, err := m.store.GetPost(ctx, key)
+		fetched, err := m.posts.GetPost(ctx, key)
 		if err != nil {
 			return nil, err
 		}
@@ -178,9 +183,10 @@ func (m *Manager) admit(ctx context.Context, key string, value []byte, stats fea
 	}
 }
 
-// decide calls the Decider with the project's fixed timeout,
-// enforced independently of whatever timeout ctx already carries.
-// requests from the cache entirely.
+// decide calls the Decider with the project's fixed timeout, enforced
+// independently of whatever timeout ctx already carries, so a slow ML
+// service can't hold up requests from the cache entirely. On any
+// error it falls back to admitting the key without a TTL.
 func (m *Manager) decide(ctx context.Context, key string, feat Features) types.CacheDecision {
 	dctx, cancel := context.WithTimeout(ctx, m.mlTimeout)
 	defer cancel()
