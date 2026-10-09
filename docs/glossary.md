@@ -35,4 +35,9 @@ the `DEV NOTE` comments inside the relevant source file.
 | Single-feature AUC is reported alongside full-model feature importance                                                              | cheap way to sanity-check whether each feature carries real signal on its own, before investing in feature engineering or selection work                                                                                                                        |
 | TTL expiry removes the cached value, not only the deadline                                                                          | Removing just the deadline made expired entries look valid and turned them into hits.                                                                                                                                                                           |
 
+| ML service refuses to start without a valid model | A silent fallback would mix deciders in "ml" results; Go already falls back to LRU. |
+| `decision_mode: heuristic` is an explicit mode, not a fallback | Gives evaluation a clean baseline without contaminating "ml" runs. |
+| Decision source is `model_name` from the metadata | Ties every logged decision to the exact model file. |
+| Single-request scoring is checked against batch scoring | Category encoding or column order drift gives wrong scores without any error. |
+
 <!-- Add new rows here whenever an important technical decision is made -->

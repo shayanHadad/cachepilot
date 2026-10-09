@@ -98,3 +98,29 @@ overhead starts measurably affecting latency results. At that point,
 a separate Go-based generator built specifically for the final
 high-rate benchmark run — not a full rewrite of the development-time
 generator — would be the narrower, lower-risk option.
+
+## Silent Fallback to the Heuristic Inside the ML Service
+
+Falling back to the heuristic when the model cannot be loaded, or adding a
+third `model-or-heuristic` mode, was considered and rejected. It makes
+"ml" results a mix of deciders without any visible sign, and Go already
+provides `fallback-lru`.
+
+**Revisit if:** availability matters more than measurement validity (for
+example a production deployment) and Go's fallback proves insufficient.
+
+## Hardcoded Decision Source Name
+
+A constant such as `lightgbm-v1` was considered for `DecisionResponse.source`.
+It cannot distinguish a retrained model from the previous one.
+
+**Revisit if:** model versions are managed by an external registry that
+assigns names.
+
+## Loading ML Service Settings From a `.env` File
+
+Rejected for now. The ML service reads `config.yaml` with defaults in code,
+the same pattern the Go service uses, and does not need a second mechanism.
+
+**Revisit if:** deployment introduces secrets or per-environment settings
+that should not live in `config.yaml`.

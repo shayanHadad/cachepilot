@@ -567,3 +567,89 @@ before the fix.
 means capacity-driven removals only. A concurrent re-admit can still
 lose its fresh value to a sweep in a narrow window; the cost is one
 extra miss, not a stale hit.
+
+## The ML Service Fails Fast Instead of Falling Back Silently
+
+### Problem
+
+If the ML service answered with a different decider whenever the model
+could not be loaded, the results labeled "ml" would quietly become a mix
+of deciders, and nothing in the output would show it. The Go service
+already has its own fallback (`fallback-lru`) for an ML service that is
+unreachable or returns an error.
+
+### Decision
+
+`ml-service/config.yaml` has an explicit `decision_mode`: `model`
+(default) or `heuristic`. In `model` mode the service refuses to start
+when the model file or its metadata is missing, when the metadata lacks
+required keys, when the model file's sha256 does not match the one
+recorded in the metadata, or when the feature names in the model or its
+metadata differ from the columns the serving code builds. A request that
+cannot be scored, such as an unseen `query_type`, is answered with
+`INVALID_ARGUMENT`, which the Go client handles like any other error.
+
+### Why
+
+Each layer has one fallback path. Python either decides with the
+configured decider or fails visibly, and Go decides what happens when it
+fails. `heuristic` mode stays available as an explicit baseline for
+evaluation, not as a safety net.
+
+### Trade-offs / Limitations
+
+Trained model files are not committed, so a fresh checkout has to run
+`ml-service/model/train.py` before the service will start. The checks run
+at startup only.
+
+## Model Identity Is Stored in Its Metadata and Reported as the Decision Source
+
+### Problem
+
+A hardcoded source name cannot tell two trained models apart, so a logged
+decision could not be tied to the model that produced it.
+
+### Decision
+
+`train.py` writes `model_name` (`lightgbm-` plus the first 8 hex characters
+of the model file's sha256), `model_sha256`, `trained_at` and
+`code_version` (git commit, with a `+dirty` suffix for uncommitted changes)
+into `model_meta.json`. The serving side verifies the hash and returns
+`model_name` as `DecisionResponse.source`, which ends up in
+`LogEntry.Source`.
+
+### Why
+
+The name comes from the file's content, so it cannot drift from the model
+it describes, and evaluation can count decisions per model.
+
+### Trade-offs / Limitations
+
+A model trained from an uncommitted tree records a `+dirty` code version.
+Commit before training for any logged experiment.
+
+## Single-Request Scoring Is Checked Against Batch Scoring
+
+### Problem
+
+The model is trained on a batch DataFrame, but the service scores one
+request at a time. Column order or `query_type` category handling could
+differ between the two paths and produce wrong scores without any error.
+
+### Decision
+
+Serving reuses `prepare_features` from `features/feature_engineering.py`.
+`ml-service/model/check_inference.py` scores every row of the test set
+through the single-request path and compares probabilities and decisions
+with batch scoring, checks that an unseen `query_type` is rejected, and
+reports in-process decision latency.
+
+### Why
+
+Parity on a real dataset covers both `query_type` values and the column
+order in one check, and it can be re-run after every retraining.
+
+### Trade-offs / Limitations
+
+The latency figure excludes gRPC and network time, while the Go side's
+8 ms ML timeout includes them.
