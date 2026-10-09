@@ -17,8 +17,11 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import lightgbm as lgb
@@ -157,6 +160,28 @@ def print_feature_importance(model: lgb.Booster) -> None:
         print(f"  {name:20s} {score:.1f}")
 
 
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def current_code_version() -> str | None:
+    """Returns the current git commit, with a "+dirty" suffix when the
+    working tree has uncommitted changes, or None if git isn't usable."""
+    here = Path(__file__).resolve().parent
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=here, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=here, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return commit + ("+dirty" if status else "")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train", default="../../data/datasets/train.parquet")
@@ -202,8 +227,15 @@ def main() -> None:
     model.save_model(str(out_path))
 
     # The threshold is part of the decision rule, so it is saved next to the model.
+    # model_name is derived from the model file's hash, so it identifies the exact
+    # model that produced a decision; the serving side reports it as the decision source.
+    digest = file_sha256(out_path)
     meta_path = out_path.with_name(out_path.stem + "_meta.json")
     meta_path.write_text(json.dumps({
+        "model_name": f"lightgbm-{digest[:8]}",
+        "model_sha256": digest,
+        "trained_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "code_version": current_code_version(),
         "best_iteration": model.best_iteration,
         "reject_score_threshold": threshold,
         "scale_pos_weight": scale_pos_weight,
