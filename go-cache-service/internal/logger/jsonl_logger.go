@@ -120,6 +120,7 @@ func (l *Logger) writeEntry(entry types.LogEntry) {
 		slog.Float64("latency_ms", entry.LatencyMs),
 		slog.Int("response_size", entry.ResponseSize),
 		slog.String("query_type", entry.QueryType),
+		slog.String("source", entry.Source),
 	)
 
 	if err := l.slogger.Handler().Handle(context.Background(), record); err != nil {
