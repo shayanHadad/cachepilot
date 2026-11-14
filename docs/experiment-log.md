@@ -17,7 +17,8 @@ Record each experiment using this template:
 - cache.policy: lru / lfu / ml
 - cache.capacity: ...
 - workload: zipf_param=..., enable_burst=..., burst_rate=...,
-  burst_intensity=..., burst_duration=..., seed=...
+  burst_share=..., burst_duration_sec=..., burst_min_idle_sec=...,
+  seed=... (plan_sha256 and post_ids_sha256 from run_config.json)
 - total number of requests: ...
 
 **Raw result:**

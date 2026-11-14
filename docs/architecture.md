@@ -437,6 +437,11 @@ dataset size, Zipfian parameter, or request rate. The underlying rule
 ("only idle keys can burst") is what matters methodologically, not
 any specific value chosen for a particular test run.
 
+> **Update:** `BurstState` no longer exists. The same rule is applied in
+> `workload_plan.build_plan` on simulated time (see "Burst Traffic Is
+> Planned as a Share of Requests"); `burst_min_idle_sec` keeps its
+> meaning.
+
 ---
 
 ## Logging Which Policy Actually Produced Each Response
@@ -1005,17 +1010,19 @@ one at a time, choosing keys among the post ids that exist in MongoDB.
   number of posts.
 - Burst injection is off by default and enabled with `--enable-burst`,
   so one generator produces both the stationary and the bursty workload
-  needed to compare policies on non-stationary access. A burst
-  multiplies one post's sampling weight by `burst_intensity` for
+  needed to compare policies on non-stationary access. While a burst
+  is active it takes a share of the traffic (`burst_share`) for
   `burst_duration_sec`; candidates must have been idle for
-  `burst_min_idle_sec` (see "Burst Candidates Must Be Idle First"). Each
-  burst start is written to `burst_ground_truth.jsonl`.
+  `burst_min_idle_sec` (see "Burst Candidates Must Be Idle First" and
+  "Burst Traffic Is Planned as a Share of Requests"). Each burst is
+  written to `burst_ground_truth.jsonl`.
 - Requests are scheduled against absolute times on a monotonic clock,
   so timing does not drift over a long run.
 - Each run writes to its own folder, `run_<timestamp>_<normal|burst>`,
-  with `results.jsonl`, `run_config.json` (every parameter) and a copy
-  of the Go service's log. Parameters are a dataclass overridable by
-  CLI flags, not a YAML file.
+  with `results.jsonl`, `burst_ground_truth.jsonl` (burst runs),
+  `run_config.json` (every parameter plus the plan and post list
+  fingerprints) and a copy of the Go service's log. Parameters are a
+  dataclass overridable by CLI flags, not a YAML file.
 
 ### Why
 
@@ -1026,26 +1033,19 @@ Bounded weights map every sampled rank to a real post.
 
 ### Trade-offs / Limitations
 
-- **Burst size (measured).** The multiplier scales the post's own base
-  weight, and candidates come from the idle posts, almost all of which
-  are low-ranked. In two runs (5,000 posts, Zipf 0.9, 100 requests per
-  second, intensity 5, 30 s bursts, 8 bursts per run) a burst added 1.5
-  to 1.6 requests on average above the key's own base rate (at most
-  7.5), and only 16 of 9,000 requests (0.18% of traffic) fell inside a
-  burst window on the burst key. A calculation from the sampling
-  weights gave about 1.2 for a random idle post, and about 0.3 with the
-  default parameters (Zipf 1.2, 50 requests per second). In this form
-  burst mode is hard to tell apart from the stationary workload; a
-  burst that tests the central hypothesis needs to set the post's share
-  of traffic directly instead of scaling its base weight.
-- **Seed (measured).** With the same seed and the same database, two
-  bursty runs produced the same key at 8,997 of 9,000 positions, and all
-  eight bursts started at the same offsets. One burst picked a
-  neighbouring post, because candidate eligibility depends on measured
-  idle time and therefore on wall-clock timing. Runs are nearly but not
-  exactly reproducible; an exact replay needs a recorded trace. Key
-  identities also depend on the seeded database: re-seeding creates new
-  ids.
+- **Earlier burst design (replaced).** The first design multiplied the
+  post's own sampling weight by `burst_intensity`. Measured in two runs
+  (5,000 posts, Zipf 0.9, 100 requests per second, intensity 5, 30 s
+  bursts, 8 bursts per run), a burst added 1.5 to 1.6 requests on
+  average above the key's own base rate (at most 7.5), and only 16 of
+  9,000 requests (0.18% of traffic) fell inside a burst window on the
+  burst key, which is hard to tell apart from the stationary workload.
+  Because eligibility used measured idle time, two runs with the same
+  seed and database also differed: the same key at 8,997 of 9,000
+  positions, with one of eight bursts on a neighbouring post. "Burst
+  Traffic Is Planned as a Share of Requests" replaces this design. Key
+  identities still depend on the seeded database: re-seeding creates new
+  ids (the run records a fingerprint of the post list).
 - **Cumulative log snapshot (measured).** The Go logger appends to its
   file and the generator copies the whole file at the end of a run (a
   copy, not a move, because the service may still be writing). If the
@@ -1154,3 +1154,81 @@ requirements file. Their docstrings mention `pymongo`, `requests`,
 write parquet. The environment for those steps cannot be recreated from
 the repository, and a virtual environment built only from
 `ml-service/requirements.txt` lacks `pymongo` and `requests`.
+
+---
+
+## Burst Traffic Is Planned as a Share of Requests
+
+### Problem
+
+Measured on the first burst design (see "Workload Generator: Bounded
+Zipf Sampling, Burst Toggle and Per-Run Output"), a burst on a typical
+idle post added about 1.5 requests, 0.18% of the traffic, and runs with
+the same seed were not exactly identical because burst eligibility
+depended on wall-clock timing. Burst mode was therefore hard to tell
+apart from the stationary workload and could not be replayed exactly.
+
+### Decision
+
+- The request sequence is built before anything is sent, by
+  `workload_plan.build_plan` (numpy only, no I/O, no wall clock).
+  `zipfian_generator.py` only sends it.
+- A burst takes a fixed share of the traffic: while it is active, each
+  request goes to the burst key with probability `burst_share` (default
+  0.10). `burst_rate` (default 1/60 per second, previously 0.02) is the
+  chance per second that a new burst starts, `burst_duration_sec` (30)
+  is its length, and `burst_min_idle_sec` (10) still restricts
+  candidates to idle posts. Overlapping bursts take their shares
+  independently, in start order. `burst_intensity` was removed, so
+  `--burst-intensity` is now rejected.
+- Time is simulated as request index divided by `requests_per_sec`, so
+  idleness and burst windows come from the plan itself, not from
+  measured time.
+- Stationary requests and bursts use two separate random streams. With
+  bursts off the sequence is the one the generator produced before (a
+  unit test compares them), and a burst run is the stationary run with
+  some requests replaced by the burst key.
+- Each plan has a SHA-256 fingerprint. `run_config.json` records
+  `plan_sha256`, `post_ids_sha256` (the ordered post id list) and
+  `n_posts`. `results.jsonl` gains `index` and `burst_id`, and
+  `burst_ground_truth.jsonl` gains `burst_id`, `rank`, `start_index`,
+  `end_index` and `requests` next to the existing `start_ts`, `end_ts`
+  and `key`.
+- `--dry-run` (with `--dry-run-posts`, default 5,000) prints the plan and
+  the burst table on synthetic posts without MongoDB or the service.
+  `requests` and `pymongo` are imported only when sending, so a dry run
+  and the tests need only numpy. The tests are in
+  `test_workload_plan.py` (`python -m unittest -v` from
+  `workload-generator/`).
+
+### Why
+
+A share does not depend on the burst post's rank, the number of posts or
+the Zipf parameter, so a burst means the same thing across experiments:
+about `burst_share × burst_duration_sec × requests_per_sec` requests,
+300 with the defaults at 100 requests per second. A deterministic plan
+makes runs comparable without recording and replaying a trace, and a
+burst run differs from its stationary counterpart only at the replaced
+requests.
+
+### Trade-offs / Limitations
+
+- Measured in a real run (18,000 requests at 100 per second, 5,000
+  posts, Zipf 0.9, burst rate 0.03): 6 bursts took 1,684 requests
+  (9.36% of the traffic), 253 to 308 per burst (8.4% to 10.3% of the
+  requests in its window), on posts of rank 304 to 2,907. A dry run on
+  synthetic posts printed the same plan hash as the one the real run
+  recorded, no request failed, and each burst's start time in the
+  ground-truth file matched the planned offset to the millisecond.
+- A burst window can be one request slot longer than planned (3,001
+  instead of 3,000 slots in two of those six bursts) because of
+  floating-point rounding at the end of the window. The result is
+  deterministic.
+- The `requests` field in `burst_ground_truth.jsonl` is the planned
+  count, not a count of responses.
+- Bursts are steps: they start and end abruptly, with no ramp or decay.
+- The plan depends on the post list. A dry run matches a real run only
+  if the database holds the same number of posts, and exact reproduction
+  needs the same ordered list (`post_ids_sha256`).
+- The measurements in "Workload Generator: Bounded Zipf Sampling, Burst
+  Toggle and Per-Run Output" describe the replaced design.
