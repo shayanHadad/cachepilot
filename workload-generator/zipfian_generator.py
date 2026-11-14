@@ -1,16 +1,19 @@
 """
 Sends a Zipfian-distributed request workload at go-cache-service,
 using real post ids from MongoDB. Burst mode is optional — when on, a
-few idle posts randomly spike in popularity for a while (see
+few idle posts each take a fixed share of the traffic for a while (see
 docs/architecture.md for why this is a toggle, not always-on).
 
-Each run gets its own timestamped folder with results, config, and a
-snapshot of the Go service's log — see create_run_dir.
+The request sequence comes from workload_plan.build_plan and does not
+depend on the wall clock. Each run gets its own timestamped folder with
+results, config, burst ground truth and a snapshot of the Go service's
+log — see create_run_dir.
 
 Usage:
-    pip install pymongo numpy requests --break-system-packages
+    pip install pymongo numpy requests
     python zipfian_generator.py --total-requests 5000 --requests-per-sec 50
     python zipfian_generator.py --enable-burst --total-requests 5000
+    python zipfian_generator.py --enable-burst --dry-run   # plan only, needs numpy only
 """
 
 import argparse
@@ -21,14 +24,15 @@ from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
-import requests
-from pymongo import MongoClient
 
 from config import WorkloadConfig
+from workload_plan import Plan, build_plan, hash_post_ids
 
 
 def load_post_ids(mongo_uri: str, db_name: str) -> list[str]:
     """All post ids in Mongo — the only valid keys the service can serve."""
+    from pymongo import MongoClient  # imported here so --dry-run needs only numpy
+
     client = MongoClient(mongo_uri)
     ids = [str(doc["_id"]) for doc in client[db_name]["posts"].find({}, {"_id": 1})]
     if not ids:
@@ -38,79 +42,25 @@ def load_post_ids(mongo_uri: str, db_name: str) -> list[str]:
     return ids
 
 
-def zipfian_weights(n: int, s: float) -> np.ndarray:
-    """Normalized probability array of length n: rank 1 is most
-    popular, weight ~ 1/rank^s.
+def print_plan_summary(plan: Plan, cfg: WorkloadConfig, n_posts: int) -> None:
+    """Prints the plan's size, fingerprint and burst table."""
+    total = len(plan.keys)
+    print(f"Plan: {total} requests over {n_posts} posts, sha256 {plan.sha256[:16]}")
+    if not cfg.enable_burst:
+        print("Bursts: off")
+        return
 
-    Not using numpy.random.zipf directly because its range is
-    unbounded — it could hand back a rank higher than we actually
-    have posts for. Building our own bounded array keeps every
-    sampled rank mapped to a real post.
-    """
-    ranks = np.arange(1, n + 1)
-    weights = 1.0 / np.power(ranks, s)
-    return weights / weights.sum()
-
-
-class BurstState:
-    """Tracks which posts are currently bursting.
-
-    Candidates for a new burst have to be idle for a while first
-    (see maybe_start_burst) — picking any random post used to mean a
-    "burst" could land on something already hot, which barely
-    changes anything since a hot post wasn't at risk of eviction
-    anyway. Idle-first is what actually models a cold post suddenly
-    going viral.
-    """
-
-    def __init__(self, base_weights: np.ndarray, cfg: WorkloadConfig, rng: np.random.Generator):
-        self.base_weights = base_weights
-        self.cfg = cfg
-        self.rng = rng
-        self.active: dict[int, float] = {}  # post index -> burst end time
-        self._weights = base_weights
-        self._dirty = False
-        # -inf = never requested, which counts as idle from the start.
-        self.last_access = np.full(base_weights.shape[0], -np.inf)
-
-    def record_access(self, idx: int, now: float) -> None:
-        self.last_access[idx] = now
-
-    def maybe_start_burst(self, now: float, n: int) -> int | None:
-        """Rolls the dice for a new burst; if one starts, picks an
-        idle-enough post and returns its index."""
-        p_per_request = self.cfg.burst_rate / max(self.cfg.requests_per_sec, 1e-9)
-        if self.rng.random() >= p_per_request:
-            return None
-
-        idle_for = now - self.last_access
-        eligible = idle_for >= self.cfg.burst_min_idle_sec
-        candidates = [i for i in range(n) if eligible[i] and i not in self.active]
-        if not candidates:
-            return None
-
-        idx = int(self.rng.choice(candidates))
-        self.active[idx] = now + self.cfg.burst_duration_sec
-        self._dirty = True
-        return idx
-
-    def expire_old_bursts(self, now: float) -> None:
-        expired = [idx for idx, end in self.active.items() if end <= now]
-        for idx in expired:
-            del self.active[idx]
-        if expired:
-            self._dirty = True
-
-    def weights(self) -> np.ndarray:
-        """Current sampling weights, recomputed only when the active
-        burst set actually changed."""
-        if self._dirty:
-            w = self.base_weights.copy()
-            for idx in self.active:
-                w[idx] *= self.cfg.burst_intensity
-            self._weights = w / w.sum()
-            self._dirty = False
-        return self._weights
+    target = cfg.burst_share * cfg.burst_duration_sec * cfg.requests_per_sec
+    print(f"Bursts: {len(plan.bursts)}, {plan.burst_requests} burst requests "
+          f"({plan.burst_requests / max(total, 1):.2%} of traffic), "
+          f"target about {target:.0f} per burst")
+    if plan.bursts:
+        print("  id  start(s)  end(s)  rank  requests  share-in-window")
+        for b in plan.bursts:
+            window = b.end_index - b.start_index + 1
+            print(f"  {b.burst_id:2d}  {b.start_index / cfg.requests_per_sec:8.1f}  "
+                  f"{(b.end_index + 1) / cfg.requests_per_sec:6.1f}  {b.key_index + 1:4d}  "
+                  f"{b.requests:8d}  {b.requests / window:15.1%}")
 
 
 def create_run_dir(cfg: WorkloadConfig) -> Path:
@@ -124,29 +74,43 @@ def create_run_dir(cfg: WorkloadConfig) -> Path:
     return run_dir
 
 
-def write_run_metadata(run_dir: Path, cfg: WorkloadConfig) -> None:
-    """Dumps every parameter for this run to run_config.json, so
-    nobody has to remember what flags produced a given result."""
+def write_run_metadata(run_dir: Path, cfg: WorkloadConfig, extra: dict) -> None:
+    """Dumps every parameter for this run, plus the plan and post list
+    fingerprints, to run_config.json, so nobody has to remember what
+    flags produced a given result."""
     metadata = asdict(cfg)
+    metadata.update(extra)
     metadata["run_started_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     with open(run_dir / "run_config.json", "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
 
 
+def dry_run(cfg: WorkloadConfig) -> None:
+    """Builds and prints the plan on synthetic posts; sends and writes nothing."""
+    plan = build_plan(cfg.dry_run_posts, cfg)
+    print(f"Dry run on {cfg.dry_run_posts} synthetic posts (nothing is sent or written)")
+    print_plan_summary(plan, cfg, cfg.dry_run_posts)
+
+
 def run_workload(cfg: WorkloadConfig) -> None:
-    rng = np.random.default_rng(cfg.seed)
+    import requests  # imported here so --dry-run needs only numpy
 
     post_ids = load_post_ids(cfg.mongo_uri, cfg.mongo_db)
     n = len(post_ids)
     print(f"Loaded {n} post ids from {cfg.mongo_db}.posts")
 
-    base_weights = zipfian_weights(n, cfg.zipf_param)
-    burst = BurstState(base_weights, cfg, rng)
+    plan = build_plan(n, cfg)
+    print_plan_summary(plan, cfg, n)
 
     run_dir = create_run_dir(cfg)
-    write_run_metadata(run_dir, cfg)
+    write_run_metadata(run_dir, cfg, {
+        "n_posts": n,
+        "post_ids_sha256": hash_post_ids(post_ids),
+        "plan_sha256": plan.sha256,
+    })
     print(f"Run output directory: {run_dir}")
 
+    bursts_by_start = {b.start_index: b for b in plan.bursts}
     results_file = open(run_dir / "results.jsonl", "a", encoding="utf-8")
 
     burst_gt_file = None
@@ -164,22 +128,22 @@ def run_workload(cfg: WorkloadConfig) -> None:
     progress_every = max(cfg.total_requests // 10, 1)
 
     for i in range(cfg.total_requests):
-        now = time.monotonic()
+        burst = bursts_by_start.get(i)
+        if burst is not None and burst_gt_file is not None:
+            start_ts = int(time.time() * 1000)
+            burst_gt_file.write(json.dumps({
+                "start_ts": start_ts,
+                "end_ts": start_ts + int(cfg.burst_duration_sec * 1000),
+                "key": post_ids[burst.key_index],
+                "burst_id": burst.burst_id,
+                "rank": burst.key_index + 1,
+                "start_index": burst.start_index,
+                "end_index": burst.end_index,
+                "requests": burst.requests,
+            }) + "\n")
 
-        if cfg.enable_burst:
-            burst.expire_old_bursts(now)
-            started_idx = burst.maybe_start_burst(now, n)
-            if started_idx is not None and burst_gt_file is not None:
-                burst_gt_file.write(json.dumps({
-                    "start_ts": int(time.time() * 1000),
-                    "end_ts": int((time.time() + cfg.burst_duration_sec) * 1000),
-                    "key": post_ids[started_idx],
-                }) + "\n")
-
-        weights = burst.weights() if cfg.enable_burst else base_weights
-        idx = rng.choice(n, p=weights)
-        key = post_ids[idx]
-        burst.record_access(idx, now)
+        key = post_ids[int(plan.keys[i])]
+        burst_id = int(plan.burst_ids[i])
 
         req_start = time.monotonic()
         try:
@@ -199,7 +163,9 @@ def run_workload(cfg: WorkloadConfig) -> None:
             "timestamp": int(time.time() * 1000),
             "key": key,
             "latency_ms": round(latency_ms, 3),
-            "is_burst": cfg.enable_burst and idx in burst.active,
+            "is_burst": burst_id >= 0,
+            "index": i,
+            "burst_id": burst_id if burst_id >= 0 else None,
         }) + "\n")
 
         if (i + 1) % progress_every == 0:
@@ -249,9 +215,9 @@ def parse_args() -> WorkloadConfig:
     for field, default in asdict(defaults).items():
         flag = "--" + field.replace("_", "-")
         if isinstance(default, bool):
-            # Only enable_burst is bool today and it defaults to
-            # False — revisit this if a bool defaulting to True
-            # ever gets added.
+            # The bool fields (enable_burst, dry_run) default to False,
+            # so store_true is enough — revisit this if a bool
+            # defaulting to True ever gets added.
             parser.add_argument(flag, action="store_true")
         else:
             parser.add_argument(flag, type=type(default), default=default)
@@ -260,4 +226,8 @@ def parse_args() -> WorkloadConfig:
 
 
 if __name__ == "__main__":
-    run_workload(parse_args())
+    cfg = parse_args()
+    if cfg.dry_run:
+        dry_run(cfg)
+    else:
+        run_workload(cfg)

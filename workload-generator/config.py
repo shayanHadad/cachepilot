@@ -23,16 +23,17 @@ class WorkloadConfig:
     requests_per_sec: float = 50.0
 
     # Fixed seed for reproducible runs — log this in experiment-log.md.
+    # The same seed, config and post list give the same request sequence,
+    # bursts included.
     seed: int = 42
 
     # Off by default (see docs/architecture.md for why it's a toggle).
     enable_burst: bool = False
-    burst_rate: float = 0.02       # chance per second a new burst starts
-    burst_intensity: float = 5.0   # weight multiplier while bursting
+    burst_rate: float = 1 / 60     # chance per second a new burst starts
+    burst_share: float = 0.10      # fraction of traffic one burst takes while active
     burst_duration_sec: float = 30.0
-    # A post has to sit idle this long before it's eligible to burst —
-    # otherwise "burst" could just re-hit an already-hot post, which
-    # wouldn't tell us anything (see zipfian_generator.py).
+    # A post has to sit idle this long before it can burst, so a burst
+    # models a cold post going viral, not one that is already hot.
     burst_min_idle_sec: float = 10.0
 
     # Each run writes to its own timestamped folder under this root
@@ -42,3 +43,7 @@ class WorkloadConfig:
     # The Go service's own log — copied into the run folder at the
     # end so everything from one run lives in one place.
     go_service_log_path: str = "../data/raw_logs/service.jsonl"
+
+    # CLI-only: build and print the plan without sending anything.
+    dry_run: bool = False
+    dry_run_posts: int = 5000
