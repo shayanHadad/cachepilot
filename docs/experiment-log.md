@@ -32,6 +32,30 @@ Record each experiment using this template:
 **One-line conclusion:** ...
 ```
 
+Training experiments (model fitting and its offline evaluation) use
+this template instead:
+
+```
+## Experiment [number] — [short description]
+**Date:** ...
+**Commit hash:** (output of git rev-parse HEAD; train from a clean tree)
+
+**Parameters:**
+- seeded posts and workload command (including seed)
+- label window (`--window-sec`), split fractions
+- train.py settings and environment (library versions)
+
+**Raw result:**
+- dataset sizes (raw, labeled, train/fit/validation/test), class rates
+- scale_pos_weight, best iteration, validation AUC
+- test ROC AUC and reject average precision (with the random baseline)
+- test report at the default and the tuned threshold
+- feature importance and single-feature AUC
+- related raw files: docs/raw-results/exp-XX-*.txt / *.json
+
+**One-line conclusion:** ...
+```
+
 ---
 
 ## Experiment 1 — First successful admit-model training run
@@ -53,7 +77,7 @@ commit on the same dataset reproduced every figure below exactly.
   the live cache during the run)
 - cache.capacity: 250
 - Training: `python train.py` with default settings (scale_pos_weight
-  auto-computed from the fit set, up to 500 boosting rounds, early
+  auto-computed from the fit set, up to 1000 boosting rounds, early
   stopping with 50 rounds patience; the training output reports
   `Evaluated only: auc`, so validation AUC is the effective stopping
   criterion and binary_logloss is tracked but does not trigger stopping)
@@ -94,7 +118,9 @@ commit on the same dataset reproduced every figure below exactly.
   frequency_1min 0.8647, inter_arrival_avg 0.6900, recency_sec 0.5195,
   payload_size_kb 0.5100 (full model: 0.8943)
 - Related raw files: `docs/raw-results/exp-01-train-output.txt`,
-  `docs/raw-results/exp-01-model-meta.json`
+  `docs/raw-results/exp-01-model-meta.json` (written before the model
+  name, hash, training time and code version were added to the
+  metadata, so it lacks those fields)
 
 **One-line conclusion:** the model learns a real, non-trivial signal
 (test AUC 0.899, ~4.7x better than random on the minority class), but
@@ -108,5 +134,10 @@ validation reject rows, so it is noisy and barely differs from 0.5. This
 experiment says nothing yet about burst behavior; `query_type` and
 `payload_size_kb` are close to useless on their own and are candidates
 for a later feature-selection experiment.
+
+**Note:** the train/test split and the fit/validation split have no gap
+between their parts, so the metrics above may be slightly optimistic;
+see "Time-Based Splits Without a Gap Between Train and Test" in
+`architecture.md`.
 
 <!-- Add real experiments here going forward -->

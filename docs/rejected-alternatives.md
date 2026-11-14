@@ -22,7 +22,7 @@ Record each entry using this template:
 
 ## Online learning for the ML decision model
 
-**Date:** (date of the original architecture decision)
+**Date:** 2026-08 (project start)
 
 **Rejected alternative:** Online model training (the model would be
 updated with every new request), instead of offline training with
@@ -48,22 +48,34 @@ measurable problem.
 
 ---
 
-- **TLS on the Go ↔ ML service gRPC connection** — rejected in favor
-  of a plain, unencrypted connection. Reasons: the connection is only
-  ever made over the internal docker-compose network, never a public
-  one, so TLS's threat model (network eavesdropping, server
-  impersonation) doesn't apply; the added handshake cost also isn't
-  worth paying on a path with a strict 5-10ms budget. Revisit
-  condition: if the Go and ML services are ever deployed on separate,
-  untrusted networks instead of a single docker-compose stack — at
-  that point this decision should be re-evaluated from scratch, not
-  just patched.
+## TLS on the Go ↔ ML Service gRPC Connection
+
+**Date:** 2026-08-21
+
+**Rejected alternative:** Encrypting the gRPC connection between the Go
+service and the ML service with TLS.
+
+**Why it was considered:** Encrypting service-to-service traffic is the
+usual default.
+
+**Why it was rejected:**
+
+- The connection is only ever made over the internal docker-compose
+  network, never a public one, so TLS's threat model (network
+  eavesdropping, server impersonation) does not apply.
+- The added TLS cost (handshake and encryption) is not worth paying on
+  a path with a strict 5–10 ms budget.
+
+**Revisit if:** The Go and ML services are ever deployed on separate,
+untrusted networks instead of a single docker-compose stack. At that
+point the decision should be re-evaluated from scratch, not just
+patched.
 
 ---
 
 ## Writing the Workload Generator in Go Instead of Python
 
-**Date:** during workload-generator implementation
+**Date:** 2026-08-22
 
 **Rejected alternative:** Writing the request generator (Zipfian
 sampling, rate limiting, burst injection) in Go instead of Python.
@@ -101,6 +113,8 @@ generator — would be the narrower, lower-risk option.
 
 ## Silent Fallback to the Heuristic Inside the ML Service
 
+**Date:** 2026-10-10
+
 Falling back to the heuristic when the model cannot be loaded, or adding a
 third `model-or-heuristic` mode, was considered and rejected. It makes
 "ml" results a mix of deciders without any visible sign, and Go already
@@ -111,6 +125,8 @@ example a production deployment) and Go's fallback proves insufficient.
 
 ## Hardcoded Decision Source Name
 
+**Date:** 2026-10-10
+
 A constant such as `lightgbm-v1` was considered for `DecisionResponse.source`.
 It cannot distinguish a retrained model from the previous one.
 
@@ -119,8 +135,166 @@ assigns names.
 
 ## Loading ML Service Settings From a `.env` File
 
+**Date:** 2026-10-10
+
 Rejected for now. The ML service reads `config.yaml` with defaults in code,
 the same pattern the Go service uses, and does not need a second mechanism.
 
 **Revisit if:** deployment introduces secrets or per-environment settings
 that should not live in `config.yaml`.
+
+---
+
+## A TTL Parameter on `Cache.Put`
+
+**Date:** 2026-08-20
+
+**Rejected alternative:** Passing a TTL into `Cache.Put` so each
+implementation enforces expiry itself.
+
+**Why it was considered:** The "ml" policy needs a per-entry lifetime,
+and `Put` is the natural place to hand it over.
+
+**Why it was rejected:** LRU and LFU are meant to be pure baselines with
+no TTL behavior. Two of the three implementations would accept the
+parameter and ignore it, which is interface pollution. TTL is tracked
+in `Manager` instead, and the interface gained only `Delete(key)` later.
+
+**Revisit if:** A second policy needs TTL semantics, or the baselines
+are extended with TTL variants.
+
+---
+
+## Marshaling Decoded Mongo Documents Directly
+
+**Date:** 2026-08-20
+
+**Rejected alternative:** Decoding a post into a generic map and
+marshaling that map straight to JSON.
+
+**Why it was considered:** Less code, and no second struct to keep in
+sync with the document schema.
+
+**Why it was rejected:** The driver's `_id` and date types implement
+`MarshalJSON` and emit Extended JSON (`{"$oid": ...}`, `{"$date": ...}`)
+with no error or warning. The bug only appears downstream, when a
+consumer expects a scalar and gets a nested object.
+
+**Revisit if:** The driver's default JSON encoding becomes plain, or the
+number of document fields makes keeping two structs in sync a real
+maintenance burden.
+
+---
+
+## Flushing the Log Buffer From a Second Goroutine
+
+**Date:** 2026-08-22
+
+**Rejected alternative:** A separate goroutine that calls `Flush()` on
+its own timer.
+
+**Why it was considered:** The simplest way to add periodic flushing
+without touching the writer loop.
+
+**Why it was rejected:** `bufio.Writer` is not safe for concurrent use,
+so the flush would race with in-progress writes. The writer goroutine
+now uses `select` over the entries channel and a ticker instead.
+
+**Revisit if:** The writer becomes mutex-guarded or is replaced by a
+concurrency-safe sink.
+
+---
+
+## Separate "Record" and "Compute" Calls in the Access Tracker
+
+**Date:** 2026-08-20
+
+**Rejected alternative:** Two tracker methods, one to record an access
+and one to compute statistics.
+
+**Why it was considered:** It is the obvious API split.
+
+**Why it was rejected:** Recording the current access before computing
+its own statistics makes recency about zero on every call, silently.
+`Observe` computes from the history before appending, so the correct
+order is the only possible one.
+
+**Revisit if:** A caller needs statistics without recording an access.
+Add a separate read-only method then, rather than splitting `Observe`.
+
+---
+
+## Configurable Retention Windows in the Access Tracker
+
+**Date:** 2026-08-20
+
+**Rejected alternative:** Passing the retention window to the tracker's
+constructor.
+
+**Why it was considered:** Flexibility for experiments.
+
+**Why it was rejected:** A retention shorter than five minutes would
+silently undercount `frequency_5min`. The one- and five-minute windows
+are constants instead.
+
+**Revisit if:** Experiments need different windows. Validate any new
+value against the five-minute minimum when it is introduced.
+
+---
+
+## Random Train/Test Split
+
+**Date:** 2026-10-03
+
+**Rejected alternative:** Splitting the labeled dataset into train and
+test sets at random.
+
+**Why it was considered:** It is the default and keeps class balance
+equal in both parts.
+
+**Why it was rejected:** A random split trains on rows that happened
+after some test rows, which never happens at serving time, so the test
+score would overstate performance on unseen future traffic.
+
+**Revisit if:** Evaluation moves to cross-validation over independent
+workload runs, with each run as its own fold.
+
+---
+
+## Fixed 0.5 Decision Threshold
+
+**Date:** 2026-10-03
+
+**Rejected alternative:** Rejecting when the reject score reaches 0.5
+instead of tuning the threshold.
+
+**Why it was considered:** No tuning step, no extra value to store.
+
+**Why it was rejected:** The target is heavily imbalanced, so 0.5 is not
+necessarily where precision and recall trade off best for the minority
+class. The threshold is tuned on the validation set and saved with the
+model.
+
+**Revisit if:** Tuning keeps giving no gain. In Experiment 1 the tuned
+threshold (0.5219) was close to 0.5 and gave near-identical test
+metrics; with a larger validation set that still holds, drop the tuning
+step to remove complexity.
+
+---
+
+## `numpy.random.zipf` for Key Popularity
+
+**Date:** 2026-08-22
+
+**Rejected alternative:** Sampling post ranks directly with numpy's Zipf
+generator.
+
+**Why it was considered:** One call and no weight array to build.
+
+**Why it was rejected:** Its range is unbounded, so it can return a rank
+higher than the number of posts. An explicit weight array over the
+existing posts maps every sampled rank to a real post.
+
+**Revisit if:** The number of posts grows so large that an explicit
+weight array becomes a memory or speed problem. Truncating or
+rejecting out-of-range draws would then be the next option.

@@ -16,6 +16,9 @@ queue, and not a centralized logging system.
 Writing is asynchronous and non-blocking (using a drop-on-full
 strategy instead of blocking the main response path when the
 internal buffer fills up).
+Each record's timestamp is Unix milliseconds (`int64`), the same
+convention used for post timestamps (see "Post serialization" below),
+so Go and Python read it identically.
 
 ### Why this is the right choice for this project
 
@@ -57,6 +60,14 @@ has a few known limitations that should be accepted knowingly:
    but would never be acceptable for, say, a financial transaction
    log. The `Logger.Dropped()` counter exists specifically so this
    rate can be measured and reported rather than hidden.
+
+   > **Update:** nothing reads `Dropped()` or `WriteErrors()` yet:
+   > `main.go` closes the logger without reporting either, so a run
+   > that lost records would look the same as a clean one. In a check
+   > of two 9,000-request runs the live log held all 18,000 records, so
+   > nothing was dropped there; the shorter per-run snapshots are
+   > explained in "Workload Generator: Bounded Zipf Sampling, Burst
+   > Toggle and Per-Run Output".
 
 ### Conclusion
 
@@ -219,9 +230,20 @@ through every policy implementation — a larger change than
 currently justified. Revisit if evaluation runs show this skewing
 capacity-pressure results under the "ml" policy.
 
+> **Update:** `Delete(key)` has since been added to the `Cache`
+> interface (see "Expired Entries Must Be Removed From the Cache, Not
+> Just From the Expiry Map"). Expired entries are now removed on access
+> and by the periodic sweep, so a stale entry holds a capacity slot for
+> at most one sweep interval. The interface still has no TTL parameter.
+
 ---
 
 ## Narrowed Scope of `ml_decision.go`; gRPC Client Design
+
+> **Superseded in part:** `ml_decision.go` has since been removed and its
+> conversion functions now live in `internal/mlclient`; see "Wire-Format
+> Conversion Lives Inside `mlclient`" below. The client design described
+> here (no TLS, lazy connect, thin client) still holds.
 
 ### Decision
 
@@ -375,6 +397,14 @@ happens to be run from — a shell script, an IDE run configuration, or
 a future Docker `WORKDIR` can all differ without breaking anything,
 as long as the same config file path is passed to `config.Load()`.
 
+> **Limitation:** `main.go` passes the literal path `config.yaml`, which
+> is resolved against the working directory, so the service still has to
+> be started from `go-cache-service/`. The ML service applies the same
+> rule to `model_path`, resolved against its own `config.yaml`. The
+> scripts in `data-pipeline/` and `ml-service/model/train.py` use
+> defaults relative to the working directory and must be run from their
+> own directories (see "Data Pipeline Stages Run Alone or Chained").
+
 ---
 
 ## Burst Candidates Must Be Idle First
@@ -448,6 +478,13 @@ With `Source` in every log line, that split can be computed directly
 from `data/raw_logs/service.jsonl` without any additional
 instrumentation.
 
+> **Update:** in `model` mode the decider's source is the `model_name`
+> from the model's metadata (`lightgbm-` plus 8 hex characters), and
+> `heuristic-v1` in `heuristic` mode; see "Model Identity Is Stored in
+> Its Metadata and Reported as the Decision Source". The field was also
+> not being written to the JSONL file until a later fix; see "The
+> `source` Field Was Not Written to the JSONL Log".
+
 ---
 
 ## Splitting the ML Service's gRPC Server from Its Decision Logic
@@ -478,6 +515,12 @@ answer — it's a real (if simple) admission rule. This let the full
 Go-to-ML gRPC path be tested end to end immediately, without waiting
 for `data-pipeline/` and `model/train.py` to exist first, while still
 producing meaningful (not arbitrary) cache behavior in the meantime.
+
+> **Update:** this entry describes the original state. The training
+> pipeline now exists and `decide()` serves the trained LightGBM model
+> by default, with the heuristic kept as an explicit `decision_mode`
+> (see "The ML Service Fails Fast Instead of Falling Back Silently").
+> The split between `grpc_server.py` and `inference.py` is unchanged.
 
 ---
 
@@ -531,6 +574,12 @@ own, and `query_type` has zero LightGBM feature importance (gain =
 finding worth keeping for the evaluation writeup, and a candidate for
 a future feature-selection experiment (does dropping the near-useless
 features change anything, for better or worse).
+
+> **Update:** `train.py` states the root cause more precisely: validation
+> logloss is computed without class weights while the training objective
+> is weighted by `scale_pos_weight`, so the two disagree and logloss
+> stops improving at round 1. AUC does not depend on weighting, which is
+> why it is the first metric and the only one that can stop training.
 
 ## Expired Entries Must Be Removed From the Cache, Not Just From the Expiry Map
 
@@ -626,7 +675,9 @@ it describes, and evaluation can count decisions per model.
 ### Trade-offs / Limitations
 
 A model trained from an uncommitted tree records a `+dirty` code version.
-Commit before training for any logged experiment.
+Commit before training for any logged experiment. The check covers the
+whole working tree, including untracked files and documentation edits,
+not only the ML code.
 
 ## Single-Request Scoring Is Checked Against Batch Scoring
 
@@ -653,3 +704,453 @@ order in one check, and it can be re-run after every retraining.
 
 The latency figure excludes gRPC and network time, while the Go side's
 8 ms ML timeout includes them.
+
+---
+
+## Wire-Format Conversion Lives Inside `mlclient`
+
+### Decision
+
+`internal/cache/ml_decision.go` was removed. The conversion between the
+`cache` package's own types (`Features`, `types.CacheDecision`) and the
+generated `decisionpb` messages now lives in
+`internal/mlclient/grpc_client.go`, as two unexported functions,
+`toDecisionRequest` and `fromDecisionResponse`. `mlclient.Client`
+implements `cache.Decider`, so the `cache` package never imports
+`decisionpb`.
+
+### Why
+
+The wire types are only needed where the RPC happens. Keeping the
+conversion next to the call means a `.proto` change touches one
+package, and the cache manager stays independent of the transport. This
+supersedes the `ml_decision.go` part of "Narrowed Scope of
+`ml_decision.go`; gRPC Client Design"; the client itself is unchanged
+(no TLS, lazy connect, no logic beyond the RPC).
+
+---
+
+## The Cache Manager Depends on a `PostFetcher` Interface
+
+### Decision
+
+`cache.Manager` loads posts through a small `PostFetcher` interface
+declared in the `cache` package (`GetPost(ctx, id) ([]byte, error)`)
+instead of holding a `*store.Store`. The Mongo store satisfies it, and
+`manager.go` no longer imports `internal/store`.
+
+### Why
+
+The manager's admission and TTL logic can be tested with an in-memory
+fake, without a running MongoDB; `manager_ttl_test.go` does this with a
+fake post source and a fixed decider. It also follows the pattern already
+used for `Decider`: the consuming package defines what it needs, and
+the concrete implementations live elsewhere.
+
+### Trade-offs / Limitations
+
+The interface is satisfied implicitly, so a signature change in the
+store is caught by the compiler where `main.go` wires the two together,
+not next to the interface.
+
+---
+
+## The `source` Field Was Not Written to the JSONL Log
+
+### Problem
+
+`LogEntry` carried a `Source` field and the cache manager filled it in,
+but the JSONL logger did not write it to the file. Nothing failed: the
+service ran and the logs looked normal. The gap only shows up when a log
+is analyzed for the model-versus-fallback breakdown.
+
+### Decision
+
+The logger now writes `source` on every record, and
+`TestLoggedLineCarriesEveryLogEntryField` (in
+`internal/logger/json_logger_test.go`) checks that every `LogEntry`
+field appears in the logged line. Logs recorded before the fix (before
+2026-10-13) cannot be used for the model-versus-fallback breakdown.
+
+### Why
+
+A field that exists in a struct but not in the output fails silently. A
+quick look at the first lines of a fresh log catches it.
+
+### Trade-offs / Limitations
+
+Older logs cannot be re-analyzed for `source`. Experiment 1 does not
+depend on it: the dataset pipeline reads only the key, timestamp and
+query type from each record.
+
+---
+
+## Offline Features Mirror the Live Tracker; `payload_size_kb` Comes From MongoDB
+
+### Decision
+
+`data-pipeline/build_dataset.py` replays the raw JSONL logs in
+timestamp order and computes `frequency_1min`, `frequency_5min`,
+`recency_sec` and `inter_arrival_avg` for each request from that key's
+history before the request, with the same windows and zero values as
+`internal/features/tracker.go`. `payload_size_kb` is the post's
+`media_size_kb`, read from MongoDB in one batch query, not the log's
+`response_size`.
+
+### Why
+
+A model trained on features computed differently from the ones it sees
+at serving time has a systematic mismatch that no offline metric
+reveals. Using only prior history keeps future data out of the
+features. `response_size` is the full serialized JSON size and is
+always above zero, even for text posts, while the ML service sees
+`media_size_kb` (0 for text posts).
+
+### Trade-offs / Limitations
+
+- The Python code is a port of the Go tracker, and no automated test
+  compares the two, so they have to be changed together.
+- The live tracker uses nanosecond timestamps while the log stores
+  milliseconds, so offline `recency_sec` and `inter_arrival_avg` can
+  differ from the live values by about a millisecond.
+- `media_size_kb` is read when the dataset is built, not when the log
+  was recorded. The posts must not be re-seeded in between, and a key
+  missing from MongoDB silently gets 0.0 (the script only reports how
+  many keys were found).
+- Every logged request becomes a training row, hits included. At
+  serving time the tracker observes every request too, so the feature
+  values match, but the model is only queried on cache misses. Training
+  rows therefore over-represent hot keys compared with what the model
+  scores in production.
+- Malformed log lines (for example a truncated last line after a forced
+  kill) are skipped with a warning.
+
+---
+
+## Look-Ahead Labels Are Computed in a Separate Pass, With a Right-Censoring Trim
+
+### Decision
+
+`data-pipeline/labeling.py` adds labels in a separate step from
+`build_dataset.py`. `label_admit` is 1 when the same key is requested
+again within `label_window_sec` (default 300 s) after the access, and 0
+otherwise. `label_ttl_sec` (seconds to the next access, NaN when there
+is none) is kept as an optional target but is not used by training.
+Rows within the window of the log's end are dropped, and the step fails
+with an explicit error if no rows remain.
+
+### Why
+
+Features look backward only, to match what is available at inference
+time; labels look forward. Separate passes make it hard to leak a
+look-ahead value into a feature. Near the end of the log, a missing
+next access may mean the recording stopped, not that the key was never
+requested again (right-censoring). Keeping those rows would
+under-label the tail, and because the time split puts the tail of the
+log into the test set, the bias would land only in test.
+
+### Trade-offs / Limitations
+
+- The trim discards one window of data: Experiment 1 (600 s of traffic,
+  300 s window) kept 29,993 of 59,993 rows. The workload must be
+  several times longer than the window.
+- The label means "requested again within the window", not "caching it
+  would have produced a hit". It ignores cache capacity: a key that
+  comes back after many other distinct keys is labeled admit even if it
+  would have been evicted first. With 5,000 posts at 100 requests per
+  second, about 96% of rows are admit, which leaves the model very
+  little to separate.
+
+---
+
+## Time-Based Splits Without a Gap Between Train and Test
+
+### Decision
+
+`data-pipeline/time_split.py` sorts the labeled rows by timestamp and
+puts the first `train_fraction` (default 0.8) in the training set and
+the rest in the test set. `train.py` carves its validation set the same
+way: the last 15% of the training rows by time. There is no random
+split anywhere.
+
+### Why
+
+A random split would train on rows that happened after some of the
+test rows, which never happens at serving time, so the test score would
+overstate performance on unseen future traffic.
+
+### Trade-offs / Limitations
+
+Both splits are by row count with no gap between the parts.
+`label_admit` looks `label_window_sec` (300 s) into the future, so the
+label of a late training row can depend on requests that fall inside
+the test period (and the same holds between fit and validation). In
+Experiment 1 the labeled rows cover only the first 300 s of the log, so
+the test period is the last minute of that span and training labels
+reach into it. The reported test and validation metrics may therefore
+be slightly optimistic; the size of the effect has not been measured.
+Dropping training rows closer than `label_window_sec` to each split
+point (an embargo) would remove the overlap.
+
+---
+
+## Admit Model Training Setup
+
+### Decision
+
+`ml-service/model/train.py` trains a LightGBM binary classifier on
+`label_admit`. The positive class is admit, so "reject" is the minority
+class.
+
+- `scale_pos_weight` is negatives over positives in the fit set,
+  computed at training time (0.038 in Experiment 1), which down-weights
+  the majority admit class.
+- Early stopping watches validation AUC only (patience 50, up to 1000
+  rounds); `binary_logloss` is logged but does not stop training.
+- The reject-score threshold (`1 - p_admit`) is chosen on the
+  validation set to maximize reject-class F1, not fixed at 0.5. It is
+  saved in `model_meta.json`, and `inference.py` applies the same rule.
+- The test set is used once, for the final report, at both the default
+  and the tuned threshold.
+- Hyperparameters use the CLI defaults (learning rate 0.05, 15 leaves,
+  `min_child_samples` 50); the seed is fixed at 42 in code. No search is
+  run.
+
+### Why
+
+The target is heavily imbalanced, so the minority class needs explicit
+weighting and a tuned threshold instead of the default cut-off. The
+threshold is part of the decision rule, so it travels with the model.
+
+### Trade-offs / Limitations
+
+- The model predicts admission only; TTL is not learned (see "TTL Is a
+  Flat Default in Both Decision Modes").
+- The threshold was selected on very few validation reject rows (132 in
+  Experiment 1) and landed close to 0.5, so it is noisy.
+- Validation shares the label-window overlap described in "Time-Based
+  Splits Without a Gap Between Train and Test".
+- Hyperparameters were not tuned.
+
+---
+
+## TTL Is a Flat Default in Both Decision Modes
+
+### Decision
+
+`inference.py` returns the same fixed TTL, five minutes
+(`DEFAULT_TTL_MS`), for every admitted request in both `model` and
+`heuristic` mode, and 0 for rejected ones. The model does not predict
+TTL, and `label_ttl_sec` is not used. The cache manager sets an expiry
+deadline from the TTL at admission; hits do not extend it.
+
+### Why
+
+The first trained model predicts admission only. The five-minute value
+is a starting point, not derived from data.
+
+### Trade-offs / Limitations
+
+- Under the "ml" policy an entry is dropped five minutes after
+  admission even if the key is still hot, which costs one extra miss
+  per hot key per five minutes and can lower the hit rate relative to
+  plain LRU. Any measured difference between "ml" and "lru" mixes the
+  admission decision with this expiry.
+- The project's stated goal is a model-driven TTL. A TTL model or a
+  rule based on `inter_arrival_avg` is the natural next step.
+
+---
+
+## Data Pipeline Stages Run Alone or Chained
+
+### Decision
+
+`data-pipeline/` has three stage scripts: `build_dataset.py` (logs to
+features), `labeling.py` (features to labels) and `time_split.py`
+(labeled rows to train and test sets). Each runs on its own.
+`pipeline.py` runs them in order with their default paths and stops at
+the first stage that fails. Training (`ml-service/model/train.py`) is a
+separate step.
+
+### Why
+
+Separate stages let one be re-run, for example `labeling.py` with a
+different `--window-sec`, without recomputing the others. The chained
+runner covers the common case.
+
+### Trade-offs / Limitations
+
+- Default paths are relative to the working directory (`../data/...` in
+  `data-pipeline/`, `../../data/...` and `artifacts/model.txt` in
+  `train.py`), so each script must be run from its own directory.
+  `check_inference.py` is the exception: it derives its paths from its
+  own location.
+- `build_dataset.py` reads every file matching its `--logs` glob and does
+  not remove duplicate records, so overlapping log snapshots would be
+  counted twice (see "Workload Generator: Bounded Zipf Sampling, Burst
+  Toggle and Per-Run Output").
+
+---
+
+## Workload Generator: Bounded Zipf Sampling, Burst Toggle and Per-Run Output
+
+### Decision
+
+`workload-generator/zipfian_generator.py` sends requests to `GET /get`
+one at a time, choosing keys among the post ids that exist in MongoDB.
+
+- Popularity follows a bounded Zipf distribution built as an explicit
+  weight array (1 / rank^s over the existing posts), not
+  `numpy.random.zipf`, whose rank is unbounded and can exceed the
+  number of posts.
+- Burst injection is off by default and enabled with `--enable-burst`,
+  so one generator produces both the stationary and the bursty workload
+  needed to compare policies on non-stationary access. A burst
+  multiplies one post's sampling weight by `burst_intensity` for
+  `burst_duration_sec`; candidates must have been idle for
+  `burst_min_idle_sec` (see "Burst Candidates Must Be Idle First"). Each
+  burst start is written to `burst_ground_truth.jsonl`.
+- Requests are scheduled against absolute times on a monotonic clock,
+  so timing does not drift over a long run.
+- Each run writes to its own folder, `run_<timestamp>_<normal|burst>`,
+  with `results.jsonl`, `run_config.json` (every parameter) and a copy
+  of the Go service's log. Parameters are a dataclass overridable by
+  CLI flags, not a YAML file.
+
+### Why
+
+The generator is a run-once script re-invoked with different parameters
+per experiment, so the command line is the record of what was run, and
+a separate folder per run keeps results from overwriting each other.
+Bounded weights map every sampled rank to a real post.
+
+### Trade-offs / Limitations
+
+- **Burst size (measured).** The multiplier scales the post's own base
+  weight, and candidates come from the idle posts, almost all of which
+  are low-ranked. In two runs (5,000 posts, Zipf 0.9, 100 requests per
+  second, intensity 5, 30 s bursts, 8 bursts per run) a burst added 1.5
+  to 1.6 requests on average above the key's own base rate (at most
+  7.5), and only 16 of 9,000 requests (0.18% of traffic) fell inside a
+  burst window on the burst key. A calculation from the sampling
+  weights gave about 1.2 for a random idle post, and about 0.3 with the
+  default parameters (Zipf 1.2, 50 requests per second). In this form
+  burst mode is hard to tell apart from the stationary workload; a
+  burst that tests the central hypothesis needs to set the post's share
+  of traffic directly instead of scaling its base weight.
+- **Seed (measured).** With the same seed and the same database, two
+  bursty runs produced the same key at 8,997 of 9,000 positions, and all
+  eight bursts started at the same offsets. One burst picked a
+  neighbouring post, because candidate eligibility depends on measured
+  idle time and therefore on wall-clock timing. Runs are nearly but not
+  exactly reproducible; an exact replay needs a recorded trace. Key
+  identities also depend on the seeded database: re-seeding creates new
+  ids.
+- **Cumulative log snapshot (measured).** The Go logger appends to its
+  file and the generator copies the whole file at the end of a run (a
+  copy, not a move, because the service may still be writing). If the
+  file is not removed or redirected between runs, each run's
+  `service.jsonl` also holds the earlier runs' records: in two
+  consecutive runs the second snapshot held all 9,000 records of the
+  first run plus its own. Use a separate `CACHEPILOT_LOGGING_PATH`, or
+  clear the file, for every run.
+- **Snapshot tail (measured).** The copy is made when the last request
+  returns, before the logger's buffer is fully flushed, so the last few
+  records are missing and the last line can be cut in the middle: the
+  first snapshot held 8,994 of 9,000 records and the second ended in a
+  truncated line, while the live log held all of them.
+  `build_dataset.py` skips a truncated line with a warning. Experiment 1
+  was 7 records short (59,993 of 60,000), which is consistent with this.
+- Requests are sequential, so a request slower than the scheduled
+  interval lowers the achieved rate below `requests_per_sec`. In the
+  two runs above, client latency averaged about 5 ms with p99 under 9
+  ms, below the 10 ms interval, and 9,000 requests took 90.0 s.
+
+---
+
+## HTTP Surface of the Cache Service
+
+### Decision
+
+The service exposes one endpoint, `GET /get?key=<hex id>`, which returns
+the post's JSON. A missing key gives 400, `store.ErrPostNotFound` gives
+404 and any other error gives 500 with a generic body. The handler calls
+`Manager.Get`, the only place that logs requests.
+
+### Why
+
+Only point lookups by `_id` are supported, so a single endpoint keeps
+the surface that benchmarks exercise small.
+
+### Trade-offs / Limitations
+
+- An id that is not a valid hex ObjectID returns 500, not 400 (checked
+  with curl; a missing key gives 400 and an unknown valid id gives
+  404), because the store reports it as a generic error.
+- A request that fails before the cache decision is not logged; the
+  workload's `results.jsonl` is the only record of failures. The
+  underlying cache still counts such a lookup as a miss while `Manager`
+  does not, so the statement that the two counters match under lru and
+  lfu holds only when no fetch fails.
+- No endpoint exposes `Manager.Stats()` or `Logger.Dropped()`. Hit rate
+  is computed from the JSONL log.
+
+---
+
+## Generated Protobuf Stubs Are Committed; the Python Import Is Edited by Hand
+
+### Decision
+
+The stubs generated from `proto/cache_decision.proto` are committed for
+both languages: `go-cache-service/internal/mlclient/decisionpb/*.pb.go`
+and `ml-service/decisionpb/cache_decision_pb2*.py`. In the generated
+Python gRPC module the import was changed by hand to a relative one
+(`from . import cache_decision_pb2 as ...`), and
+`ml-service/decisionpb/__init__.py` makes the directory a package.
+`grpc_server.py` imports the stubs as `decisionpb` after adding
+`ml-service/` to `sys.path`.
+
+### Why
+
+Committed stubs mean nobody needs `protoc` to run the services. The
+relative import makes the generated module work as part of a package;
+the generator emits an absolute import that fails there.
+
+### Trade-offs / Limitations
+
+- Regenerating the Python stubs overwrites the hand-edited import, so the
+  edit has to be repeated. The regeneration command in `__init__.py` does
+  not mention this step.
+- The generated code checks the installed protobuf runtime at import time
+  and raises a `VersionError` on an incompatible version. The committed
+  stubs record protobuf 5.28.1 in their header, while
+  `requirements.txt` pins the runtime to 5.29.3 (same major version, and
+  it works). When protobuf is upgraded, the header version should be
+  checked and the stubs regenerated.
+
+---
+
+## Python Dependencies Are Pinned for the ML Service Only
+
+### Decision
+
+`ml-service/requirements.txt` pins grpcio 1.68.1, grpcio-tools 1.68.1,
+protobuf 5.29.3, pyyaml 6.0.2, lightgbm 4.5.0, scikit-learn 1.5.2,
+pandas 2.2.3 and pyarrow 18.1.0. Go dependencies are in `go.mod`
+(Go 1.26.1, mongo-driver 1.17.9, grpc 1.83.1, protobuf 1.36.12,
+yaml.v3 3.0.1).
+
+### Why
+
+The ML service is the part where a library version changes results (the
+model file and the `VersionError` check both depend on it), so it was
+pinned first.
+
+### Trade-offs / Limitations
+
+`data-pipeline/`, `workload-generator/` and `scripts/` have no
+requirements file. Their docstrings mention `pymongo`, `requests`,
+`numpy` and `pandas`, and `build_dataset.py` also needs `pyarrow` to
+write parquet. The environment for those steps cannot be recreated from
+the repository, and a virtual environment built only from
+`ml-service/requirements.txt` lacks `pymongo` and `requests`.
