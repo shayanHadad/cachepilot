@@ -22,9 +22,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import lightgbm as lgb
-import pandas as pd
+import numpy as np
 
-from features.feature_engineering import CATEGORICAL_COLUMNS, FEATURE_COLUMNS, prepare_features
+from features.feature_engineering import CATEGORICAL_COLUMNS, FEATURE_COLUMNS
 
 
 @dataclass
@@ -68,8 +68,8 @@ class _LoadedModel:
     name: str
     threshold: float
     best_iteration: int
-    # query_type values seen in training, or None if the model file doesn't expose them.
-    query_types: frozenset | None
+    # query_type -> category code, from the category list stored in the model file.
+    query_type_codes: dict[str, int]
 
 
 _mode: str | None = None
@@ -142,17 +142,24 @@ def _load_model(model_path: Path) -> _LoadedModel:
                 f"{FEATURE_COLUMNS}; retrain or fix feature_engineering.py"
             )
 
-    query_types = None
+    # Single requests are scored from a plain array, so query_type has to be
+    # passed as the category code LightGBM stored at training time.
     categories = getattr(booster, "pandas_categorical", None)
-    if categories:
-        query_types = frozenset(categories[CATEGORICAL_COLUMNS.index("query_type")])
+    if not categories:
+        raise InferenceInitError(
+            f"{model_path} does not store the query_type categories; "
+            f"re-run train.py (it trains on a pandas DataFrame)"
+        )
+    query_type_codes = {
+        name: code for code, name in enumerate(categories[CATEGORICAL_COLUMNS.index("query_type")])
+    }
 
     return _LoadedModel(
         booster=booster,
         name=str(meta["model_name"]),
         threshold=float(meta["reject_score_threshold"]),
         best_iteration=int(meta["best_iteration"]),
-        query_types=query_types,
+        query_type_codes=query_type_codes,
     )
 
 
@@ -168,23 +175,26 @@ def admit_probability(
     if _mode != "model" or _loaded is None:
         raise RuntimeError("admit_probability() needs init('model', ...) first")
 
-    if _loaded.query_types is not None and query_type not in _loaded.query_types:
+    code = _loaded.query_type_codes.get(query_type)
+    if code is None:
         raise InvalidRequestError(
-            f"unknown query_type {query_type!r}; the model was trained on {sorted(_loaded.query_types)}"
+            f"unknown query_type {query_type!r}; the model was trained on {sorted(_loaded.query_type_codes)}"
         )
 
-    row = pd.DataFrame([{
+    values = {
         "frequency_1min": frequency_1min,
         "frequency_5min": frequency_5min,
         "recency_sec": recency_sec,
         "inter_arrival_avg": inter_arrival_avg,
         "payload_size_kb": payload_size_kb,
-        "query_type": query_type,
-    }])
+        "query_type": code,
+    }
+    # A one-row DataFrame costs more than the prediction itself, so the row is
+    # a plain array in FEATURE_COLUMNS order. check_inference.py compares this
+    # path with batch scoring.
+    row = np.array([[values[c] for c in FEATURE_COLUMNS]], dtype=np.float64)
     # num_threads=1: a single row isn't worth spinning up OpenMP threads for.
-    p = _loaded.booster.predict(
-        prepare_features(row), num_iteration=_loaded.best_iteration, num_threads=1
-    )
+    p = _loaded.booster.predict(row, num_iteration=_loaded.best_iteration, num_threads=1)
     return float(p[0])
 
 
