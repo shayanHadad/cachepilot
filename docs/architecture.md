@@ -656,6 +656,12 @@ Trained model files are not committed, so a fresh checkout has to run
 `ml-service/model/train.py` before the service will start. The checks run
 at startup only.
 
+> **Update:** a model file that does not store the `query_type` categories
+> is also refused at startup, because single requests are scored from the
+> category codes (see "Single Requests Are Scored From a NumPy Row, Not a
+> DataFrame"). Earlier, a missing list silently skipped the unseen
+> `query_type` check.
+
 ## Model Identity Is Stored in Its Metadata and Reported as the Decision Source
 
 ### Problem
@@ -709,6 +715,13 @@ order in one check, and it can be re-run after every retraining.
 
 The latency figure excludes gRPC and network time, while the Go side's
 8 ms ML timeout includes them.
+
+> **Update:** serving no longer calls `prepare_features`; single requests
+> are scored from a one-row numpy array (see "Single Requests Are Scored
+> From a NumPy Row, Not a DataFrame"). `check_inference.py` is unchanged
+> and still compares that path with batch scoring, which is what protects
+> it. After the change it reported a maximum probability difference of 0
+> on 5,999 test rows and a median in-process decision time of 0.082 ms.
 
 ---
 
@@ -1232,3 +1245,119 @@ requests.
   needs the same ordered list (`post_ids_sha256`).
 - The measurements in "Workload Generator: Bounded Zipf Sampling, Burst
   Toggle and Per-Run Output" describe the replaced design.
+
+---
+
+## Single Requests Are Scored From a NumPy Row, Not a DataFrame
+
+### Problem
+
+In a first smoke test with policy `ml` (6,000 requests at 100 per second),
+33.7% of the misses that needed a model decision (1,111 of 3,296) ended
+as `fallback-lru`, because the decision did not return within the 8 ms
+timeout. The in-process check had reported about 2.1 ms per decision, so
+the live cost was far above the tight-loop figure (see "ML Decision
+Latency Depends on the Call Pattern").
+
+### Decision
+
+`inference.admit_probability` builds a one-row numpy array in
+`FEATURE_COLUMNS` order and passes `query_type` as its category code (the
+index in the category list stored in the model file), instead of building
+a pandas DataFrame for every request. At startup the service refuses a
+model file that does not store that list.
+
+### Why
+
+A throwaway diagnostic timed the same call back to back (`tight`), every
+10 ms (`paced`), and at irregular gaps like cache misses (`sporadic`, 55%
+of the 10 ms ticks), both in-process (`local`) and as a gRPC call to the
+running service. Median time in ms, and the share of calls over the 8 ms
+timeout:
+
+|                | DataFrame p50 | over 8 ms | NumPy p50 | over 8 ms |
+| -------------- | ------------- | --------- | --------- | --------- |
+| local tight    | 2.22          | 0.0%      | 0.05      | 0.0%      |
+| local paced    | 3.95          | 2.3%      | 0.58      | 0.1%      |
+| local sporadic | 5.65          | 26.7%     | 0.57      | 0.0%      |
+| grpc tight     | 2.75          | 0.0%      | 0.48      | 0.0%      |
+| grpc paced     | 4.48          | 17.6%     | 3.20      | 0.0%      |
+| grpc sporadic  | 7.09          | 43.3%     | 2.84      | 0.1%      |
+
+Building the frame was almost all of the per-call work. The probabilities
+are identical to the DataFrame path and to batch scoring (maximum
+difference 0 on 5,999 test rows, no decision differs).
+
+### Trade-offs / Limitations
+
+- The category codes come from the category list in the model file, read
+  at startup, so a retrained model brings its own codes.
+- `check_inference.py` has to be re-run after every change to the scoring
+  code and after retraining; it is the only protection against a wrong
+  column order or category code.
+- An unseen `query_type` is still rejected with `INVALID_ARGUMENT`.
+
+---
+
+## ML Decision Latency Depends on the Call Pattern
+
+### Problem
+
+The same decision took longer when calls were spaced than when they came
+back to back, so a latency figure from a tight loop did not predict live
+behavior. In the first smoke test (policy `ml`, 6,000 requests at 100 per
+second, 5,000 posts, Zipf 0.9, capacity 250, DataFrame scoring), the
+share of model calls that ended as a fallback rose with the gap since the
+previous model call: 29.0% for back-to-back calls, 34.5% for a gap of two
+requests, 41.6% for three to four and 60.4% for five to nine. Fallbacks
+were clustered (71.6% after a fallback, 14.4% after a success) and did
+not depend on `query_type` (33.7% for text posts, 33.8% for media
+posts). The decision time of the successful calls, estimated as the miss
+latency minus the median miss latency under lru, had a median of about
+4.9 ms.
+
+### Decision
+
+- The scoring path was made lighter (see "Single Requests Are Scored From
+  a NumPy Row, Not a DataFrame").
+- The `source` field makes the fallback share measurable in every run, so
+  any evaluation run should report it, and should leave out the first
+  requests of a run or warm up the gRPC connection first, because the
+  first calls fall back while the lazy connection is established.
+- The cause of the call-pattern effect was not established.
+
+### Why
+
+After the change, a second smoke test on the same 6,000 keys gave:
+
+|                                            | before (DataFrame)     | after (NumPy)         |
+| ------------------------------------------ | ---------------------- | --------------------- |
+| `fallback-lru` among model-needing misses  | 33.7% (1,111)          | 0.1% (4)              |
+| fallbacks after the first 100 requests     | 34.2%                  | 0.0%                  |
+| model-decided miss latency p50 / p99 / max | 6.12 / 9.38 / 10.12 ms | 3.36 / 4.46 / 6.90 ms |
+| mean server-side latency per request       | 4.14 ms                | 1.62 ms               |
+
+The four remaining fallbacks are requests 0 to 3, while the lazy gRPC
+connection was being established. For comparison, a separate earlier run
+under lru on a different request sequence had a mean server-side latency
+of 0.68 ms.
+
+### Trade-offs / Limitations
+
+- The cause is open. CPU power management was suspected (the same call is
+  slower after idle gaps, in-process and over gRPC) but a power-profile
+  experiment was prepared and not run.
+- Spaced gRPC calls are still about 2.7 ms slower than back-to-back calls
+  (3.20 against 0.48 ms p50). The slowest model-decided miss was 6.9 ms
+  against the 8 ms timeout, so a busier machine or concurrent load can
+  bring fallbacks back.
+- Policy `ml` adds the decision time to every miss (mean 1.62 ms per
+  request here against 0.68 ms under lru in the earlier run), which has to
+  be weighed against any hit rate gain.
+- Hit rate was 45.07% in the first test (mixed deciders) and 47.03% in the
+  second, against 42.93% for an offline LRU(250) simulation on the same
+  sequence. This is not evidence about the model: the workload used
+  seed 42, the seed of the run the model was trained on (Experiment 1), and
+  lru was simulated, not run.
+- Both smoke tests ran before the changes were committed, so they are not
+  logged in `experiment-log.md`.
