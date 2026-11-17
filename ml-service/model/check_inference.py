@@ -50,8 +50,8 @@ def check_parity(model_path: Path, records: list, test_df: pd.DataFrame) -> bool
     meta = json.loads(model_path.with_name(model_path.stem + "_meta.json").read_text(encoding="utf-8"))
     booster = lgb.Booster(model_file=str(model_path))
     batch_p = booster.predict(prepare_features(test_df), num_iteration=meta["best_iteration"])
-    threshold = float(meta["reject_score_threshold"])
-    batch_admit = ~((1.0 - batch_p) >= threshold)
+    threshold = float(meta["admit_probability_threshold"])
+    batch_admit = batch_p >= threshold
 
     single_p = np.array([inference.admit_probability(**rec) for rec in records])
     single_admit = np.array([

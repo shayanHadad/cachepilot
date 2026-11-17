@@ -48,16 +48,15 @@ HEURISTIC_SOURCE = "heuristic-v1"
 # treated as recurring interest and cached; everything else is skipped.
 MIN_FREQUENCY_1MIN_TO_ADMIT = 1
 
-# Flat TTL in both modes. The model only predicts admit/reject, so TTL
-# is not model-driven yet. 5 minutes was a starting point, not derived
-# from anything.
-DEFAULT_TTL_MS = 5 * 60 * 1000
+# Admitted keys never expire (ttl_ms 0 means no TTL). TTL is not model-driven
+# yet, and a fixed one would only add a second variable to every comparison.
+NO_TTL_MS = 0
 
 REQUIRED_META_KEYS = (
     "model_name",
     "model_sha256",
     "best_iteration",
-    "reject_score_threshold",
+    "admit_probability_threshold",
     "feature_names",
 )
 
@@ -98,7 +97,7 @@ def describe() -> str:
         return f"mode=heuristic source={HEURISTIC_SOURCE}"
     if _mode == "model" and _loaded is not None:
         return (f"mode=model source={_loaded.name} "
-                f"reject_threshold={_loaded.threshold:.4f} best_iteration={_loaded.best_iteration}")
+                f"admit_threshold={_loaded.threshold:.4f} best_iteration={_loaded.best_iteration}")
     return "not initialized"
 
 
@@ -157,7 +156,7 @@ def _load_model(model_path: Path) -> _LoadedModel:
     return _LoadedModel(
         booster=booster,
         name=str(meta["model_name"]),
-        threshold=float(meta["reject_score_threshold"]),
+        threshold=float(meta["admit_probability_threshold"]),
         best_iteration=int(meta["best_iteration"]),
         query_type_codes=query_type_codes,
     )
@@ -171,7 +170,7 @@ def admit_probability(
     payload_size_kb: float,
     query_type: str,
 ) -> float:
-    """Returns the model's probability that this request should be admitted."""
+    """Returns the model's probability that the key is requested again before the cache would drop it."""
     if _mode != "model" or _loaded is None:
         raise RuntimeError("admit_probability() needs init('model', ...) first")
 
@@ -209,16 +208,16 @@ def decide(
 ) -> Decision:
     if _mode == "heuristic":
         admit = frequency_1min >= MIN_FREQUENCY_1MIN_TO_ADMIT
-        return Decision(admit=admit, ttl_ms=DEFAULT_TTL_MS if admit else 0, source=HEURISTIC_SOURCE)
+        return Decision(admit=admit, ttl_ms=NO_TTL_MS, source=HEURISTIC_SOURCE)
 
     if _mode == "model" and _loaded is not None:
         p_admit = admit_probability(
             frequency_1min, frequency_5min, recency_sec,
             inter_arrival_avg, payload_size_kb, query_type,
         )
-        # Same rule as train.py: reject when the reject score reaches the tuned threshold.
-        is_reject = (1.0 - p_admit) >= _loaded.threshold
-        admit = not is_reject
-        return Decision(admit=admit, ttl_ms=DEFAULT_TTL_MS if admit else 0, source=_loaded.name)
+        # Same rule as train.py: admit when the probability reaches the
+        # threshold chosen on validation.
+        admit = p_admit >= _loaded.threshold
+        return Decision(admit=admit, ttl_ms=NO_TTL_MS, source=_loaded.name)
 
     raise RuntimeError("inference.init() has not been called")
