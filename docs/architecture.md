@@ -690,6 +690,12 @@ Commit before training for any logged experiment. The check covers the
 whole working tree, including untracked files and documentation edits,
 not only the ML code.
 
+> **Update:** the metadata now carries `admit_probability_threshold` instead
+> of `reject_score_threshold`, plus `label`, `capacity`, `validation_hit_rate`
+> and `validation_lru_hit_rate`. The serving side requires the new
+> threshold key, so a model trained before this change is refused at
+> startup.
+
 ## Single-Request Scoring Is Checked Against Batch Scoring
 
 ### Problem
@@ -879,6 +885,11 @@ log into the test set, the bias would land only in test.
   second, about 96% of rows are admit, which leaves the model very
   little to separate.
 
+> **Update:** the 300 s label was replaced by `label_reuse` (see "The Training Label Is Reuse Within the Cache's Reach").
+> The separate pass and the right-censoring reasoning still hold, but the
+> trim is now the last few hundred rows (250 of 60,000) instead of one
+> window, and the 96% positive rate no longer applies.
+
 ---
 
 ## Time-Based Splits Without a Gap Between Train and Test
@@ -909,6 +920,10 @@ reach into it. The reported test and validation metrics may therefore
 be slightly optimistic; the size of the effect has not been measured.
 Dropping training rows closer than `label_window_sec` to each split
 point (an embargo) would remove the overlap.
+
+> **Update:** resolved. Training rows whose label reaches into a later
+> period are flagged and left out (see "Training Labels Never Depend on a Later Period (Exact Embargo)"). The size of the
+> earlier effect was not measured.
 
 ---
 
@@ -950,6 +965,13 @@ threshold is part of the decision rule, so it travels with the model.
   Splits Without a Gap Between Train and Test".
 - Hyperparameters were not tuned.
 
+> **Update:** `train.py` now fits `label_reuse` (positive class: the key is
+> reused within the cache's reach), skips rows whose label reaches into a
+> later period, and chooses the threshold by simulated hit rate instead of
+> reject-class F1 (see "The Training Label Is Reuse Within the Cache's Reach" and "The Admission Threshold Is Chosen by Simulated Hit Rate").
+> `scale_pos_weight` is about 1.17 on the current data. The other points
+> above still hold.
+
 ---
 
 ## TTL Is a Flat Default in Both Decision Modes
@@ -976,6 +998,9 @@ is a starting point, not derived from data.
   admission decision with this expiry.
 - The project's stated goal is a model-driven TTL. A TTL model or a
   rule based on `inter_arrival_avg` is the natural next step.
+
+> **Update:** replaced. `ttl_ms` is now 0 in both modes (see "Admitted Keys Never Expire (`ttl_ms` Is 0)").
+> The measured effects above describe the earlier flat TTL.
 
 ---
 
@@ -1361,3 +1386,228 @@ of 0.68 ms.
   lru was simulated, not run.
 - Both smoke tests ran before the changes were committed, so they are not
   logged in `experiment-log.md`.
+
+---
+
+## The Training Label Is Reuse Within the Cache's Reach
+
+### Problem
+
+The first label asked whether a key is requested again within 300 s. With
+5,000 posts at 100 requests per second almost every key is (96.3%
+positive in Experiment 1), so it said nothing about whether caching a key
+pays off in a cache of 250 keys. In an offline simulation a model trained
+on it admitted 73% of misses and beat plain LRU by only 2.9 points, and an
+exact embargo was impossible on a 600 s workload, because a 300 s window
+left no validation data.
+
+### Decision
+
+`data-pipeline/labeling.py` writes `label_reuse`: 1 when the key is
+requested again before `capacity` other distinct keys have been
+requested, which is exactly the condition for the next request to hit an
+LRU cache of that capacity when every key is admitted. `--capacity`
+defaults to 250 (`cache.capacity` of the Go service) and is stored in
+every row as `label_capacity`. One sliding-window pass over the key
+sequence computes all labels. Each row also gets `label_end_ts`, the
+timestamp of the request at which its label became certain (see
+"Training Labels Never Depend on a Later Period (Exact Embargo)"), and `label_ttl_sec` (seconds to the key's next request,
+NaN if none) is kept for a future TTL model. A row whose key never
+reappears and which is followed by fewer than `capacity` distinct keys is
+dropped as right-censored (250 of 60,000 rows in the training run).
+
+### Why
+
+The label asks the question the cache has: will this key still be there
+when it is asked for again. In the offline study ("Offline Study of the Admission Policy (Findings)") windows of
+2 to 10 s and this exact criterion gave the same hit rate (about 54.8% on
+the stationary test sequence) and a 30 s window was slightly worse. The
+capacity-based criterion does not depend on the request rate and needs no
+window length to be chosen.
+
+### Trade-offs / Limitations
+
+- The label is a proxy: admitting a key also displaces another one, so the
+  threshold ("The Admission Threshold Is Chosen by Simulated Hit Rate") is what turns the probability into a good
+  policy. At its best the policy admits only about 0.5% of misses.
+- It assumes an LRU cache in which every key is admitted; it does not know
+  what the model itself would admit.
+- A model is trained for one capacity; retrain after changing
+  `cache.capacity`.
+
+---
+
+## Training Labels Never Depend on a Later Period (Exact Embargo)
+
+### Problem
+
+Labels look forward, so a late training row can be labeled with requests
+from the validation or test period (see "Time-Based Splits Without a Gap
+Between Train and Test").
+
+### Decision
+
+`time_split.py` marks every training row whose `label_end_ts` is at or
+after the first test request as `label_leaks` (250 rows in the training
+run) instead of removing it. `train.py` does not fit on those rows nor on
+rows whose label ends after the validation start (500 rows left out in
+total), and does not validate on leaking rows. The rows stay in the file
+because the cache simulation needs the complete request sequence.
+
+### Why
+
+An exact cut-off replaces a fixed gap. The gap needed depends on when each
+label became certain, and with the old 300 s window no gap was possible on
+a 600 s workload.
+
+### Trade-offs / Limitations
+
+- The simulation scores the early part of the training period with a model
+  that was fitted on it, so the cache it warms is a little optimistic;
+  only the validation tail is counted.
+- Test rows at the end of the log are dropped as censored, so a test
+  period always lacks its last `capacity` requests.
+
+---
+
+## The Admission Threshold Is Chosen by Simulated Hit Rate
+
+### Problem
+
+With the first label the threshold was the one that maximized F1 of the
+minority class. With the capacity-aware label that rule picks a
+probability threshold of about 0.59, which admits almost nothing: in the
+offline study the hit rate fell to 42.4% on the stationary test sequence,
+below plain LRU (43.0%). The hit rate depends strongly on the threshold
+(model trained on the stationary sequence, same test sequence):
+
+| admit when p is at least | 0.1   | 0.2   | 0.3   | 0.4   | 0.5   | 0.6   | 0.8   |
+| ------------------------ | ----- | ----- | ----- | ----- | ----- | ----- | ----- |
+| hit rate                 | 49.5% | 54.0% | 54.5% | 50.2% | 45.3% | 41.7% | 34.3% |
+| misses admitted          | 46.2% | 13.5% | 1.1%  | 0.6%  | 0.4%  | 0.3%  | 0.1%  |
+
+### Decision
+
+`ml-service/model/admission_sim.py` replays a request sequence through an
+LRU cache of the label's capacity with an admission rule (same eviction as
+the Go LRU; no TTL and no timing). `train.py` scores the whole training
+period, replays it for each candidate threshold (0.05 to 0.95 in steps of
+0.05) and keeps the one with the highest hit rate on the validation tail;
+the cache is warmed by the earlier rows and ties go to the lowest
+threshold. The threshold is saved as `admit_probability_threshold`, and
+serving admits when the probability is at least that value. A rule "admit
+when `frequency_1min` >= k" is tuned the same way and reported next to the
+model.
+
+### Why
+
+Hit rate is what the cache is for. The decision is not "will this key be
+reused" but "is it worth displacing another key": at the best thresholds
+the policy admits only about 0.5 to 1% of misses, so a classification
+metric says little about it.
+
+### Trade-offs / Limitations
+
+- The simulation ignores TTL, latency and timeouts, and the simulator has
+  not yet been compared with a real LRU run.
+- Only a narrow range of thresholds works (see the table), and the choice
+  depends on the validation tail.
+- Training run on real data, logged as Experiment 2 (60,000 requests with
+  bursts, seed 142, model `lightgbm-40b5939e`): threshold 0.25, validation hit rate 56.79% (LRU
+  43.51%, rule `frequency_1min` >= 6 56.97%). On the last 20% of the run:
+  LRU 46.72%, the rule 58.65%, the model 58.34% (admits 0.6% of misses).
+
+---
+
+## Admitted Keys Never Expire (`ttl_ms` Is 0)
+
+### Decision
+
+`inference.py` returns `ttl_ms=0` for every decision in both modes. The
+cache manager treats 0 as no TTL, so admitted keys stay until LRU evicts
+them, and the model is admission-only. `label_ttl_sec` is still written for
+a future TTL model.
+
+### Why
+
+TTL is not model-driven, and a fixed one adds a second variable to every
+comparison: the flat five-minute TTL dropped hot keys after five minutes
+and cost a miss per hot key (see "TTL Is a Flat Default in Both Decision
+Modes").
+
+### Trade-offs / Limitations
+
+- The project goal includes TTL. Until a TTL model exists, "ml" is an
+  admission policy on top of LRU eviction.
+- Models trained before this change are refused at startup, because the
+  required metadata key `admit_probability_threshold` replaces
+  `reject_score_threshold`; the service says to re-run `train.py`.
+
+---
+
+## Offline Study of the Admission Policy (Findings)
+
+### Setup
+
+The study used scratch code that is not in the repository: request
+sequences from `workload_plan`, features computed the same way as
+`build_dataset.py`, and an LRU simulation with capacity 250. Posts: 5,000,
+Zipf 0.9, 100 requests per second, 60,000 requests, hit rate counted after
+the first 1,000 requests. Training seeds were 42 (stationary) and 142
+(bursts), test seeds 43 (stationary) and 143 (bursts); media sizes were
+synthetic.
+
+### Results
+
+| policy                                                     | stationary     | bursts         |
+| ---------------------------------------------------------- | -------------- | -------------- |
+| LRU                                                        | 42.97%         | 45.88%         |
+| LFU (as in the Go service)                                 | 52.53%         | 52.71%         |
+| rule `frequency_1min` >= 4 (k chosen on the test sequence) | 53.91%         | 56.12%         |
+| model, 300 s label, threshold 0.5                          | 45.88%         | 48.71%         |
+| model, capacity-aware label, threshold from validation     | 54.4% to 54.8% | 56.3% to 56.9% |
+| hindsight: the 250 most requested keys held all run        | 56.92%         | 58.61%         |
+
+Label windows of 2 to 10 s versus the exact criterion (within 0.4 points),
+training on stationary versus burst traffic, and fitting on all requests
+versus only those that miss under LRU (under 0.2 points each) made little
+difference.
+
+Eight independent seeds per workload (2001 to 2008), with a proxy model:
+the repository's pipeline trained on a dataset built without MongoDB from
+the seed-142 sequence. Mean ± standard deviation over seeds:
+
+|            | LRU          | LFU          | rule >= 6    | rule >= 4    | model        |
+| ---------- | ------------ | ------------ | ------------ | ------------ | ------------ |
+| stationary | 43.07 ± 0.28 | 52.19 ± 0.41 | 53.06 ± 0.32 | 53.94 ± 0.27 | 54.78 ± 0.33 |
+| bursts     | 45.26 ± 0.93 | 53.46 ± 0.55 | 54.46 ± 0.62 | 55.61 ± 0.65 | 56.33 ± 0.64 |
+
+Paired difference of the model over each policy, stationary / bursts, in
+points: LRU +11.7 / +11.1, LFU +2.6 / +2.9, rule >= 6 +1.7 / +1.9, rule
+
+> = 4 +0.8 / +0.7. The model was better in all 8 seeds of every comparison.
+
+### Observations
+
+- Most of the signal is in one feature. On the validation set of the real
+  training run, `frequency_1min` alone has an AUC of 0.9445 against 0.9495
+  for the full model, and it carries most of the gain importance.
+- The model's advantage over a rule depends on how well the rule is tuned:
+  `frequency_1min` >= 6 (chosen on validation) is weaker than >= 4.
+- A burst-specific advantage is not visible: over rule >= 4 it is +0.84
+  points on stationary traffic and +0.71 on bursts. The features only have
+  1-minute and 5-minute windows.
+- On the last 20% of the real training run the model was 0.3 points below
+  the rule (58.34% against 58.65%); that is one 120 s segment, and the
+  multi-seed comparison is the better guide.
+
+### Limitations
+
+- The multi-seed numbers come from a proxy model; the real model
+  `lightgbm-40b5939e` has not been evaluated on those seeds.
+- One configuration (posts, capacity, Zipf parameter), and a simulation
+  that has not been compared with the real system.
+- Because the study code is not in the repository, it is not logged in
+  `experiment-log.md`. The evaluation should include LRU, LFU and the tuned
+  frequency rule next to the model, on seeds different from the training
+  seeds.

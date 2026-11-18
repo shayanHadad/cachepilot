@@ -1,0 +1,191 @@
+Loaded 47791 train rows, 11948 test rows (label capacity 250)
+Fit rows 40372, validation rows 6919, 500 rows left out because their label reaches into a later period
+scale_pos_weight: 1.173 (from fit set's class balance)
+[1]	valid_0's auc: 0.944721	valid_0's binary_logloss: 0.656834
+Training until validation scores don't improve for 50 rounds
+[2]	valid_0's auc: 0.944721	valid_0's binary_logloss: 0.629004
+[3]	valid_0's auc: 0.944702	valid_0's binary_logloss: 0.603762
+[4]	valid_0's auc: 0.944819	valid_0's binary_logloss: 0.580861
+[5]	valid_0's auc: 0.945534	valid_0's binary_logloss: 0.5598
+[6]	valid_0's auc: 0.945898	valid_0's binary_logloss: 0.540486
+[7]	valid_0's auc: 0.946121	valid_0's binary_logloss: 0.522804
+[8]	valid_0's auc: 0.946253	valid_0's binary_logloss: 0.5066
+[9]	valid_0's auc: 0.946344	valid_0's binary_logloss: 0.491631
+[10]	valid_0's auc: 0.946989	valid_0's binary_logloss: 0.477793
+[11]	valid_0's auc: 0.947058	valid_0's binary_logloss: 0.465
+[12]	valid_0's auc: 0.946995	valid_0's binary_logloss: 0.453137
+[13]	valid_0's auc: 0.946982	valid_0's binary_logloss: 0.442144
+[14]	valid_0's auc: 0.947001	valid_0's binary_logloss: 0.431983
+[15]	valid_0's auc: 0.94725	valid_0's binary_logloss: 0.422529
+[16]	valid_0's auc: 0.947266	valid_0's binary_logloss: 0.41376
+[17]	valid_0's auc: 0.947273	valid_0's binary_logloss: 0.405424
+[18]	valid_0's auc: 0.947244	valid_0's binary_logloss: 0.397638
+[19]	valid_0's auc: 0.947278	valid_0's binary_logloss: 0.390491
+[20]	valid_0's auc: 0.947065	valid_0's binary_logloss: 0.383794
+[21]	valid_0's auc: 0.947095	valid_0's binary_logloss: 0.377634
+[22]	valid_0's auc: 0.947123	valid_0's binary_logloss: 0.371873
+[23]	valid_0's auc: 0.94713	valid_0's binary_logloss: 0.366374
+[24]	valid_0's auc: 0.947219	valid_0's binary_logloss: 0.361256
+[25]	valid_0's auc: 0.947267	valid_0's binary_logloss: 0.356402
+[26]	valid_0's auc: 0.947318	valid_0's binary_logloss: 0.351824
+[27]	valid_0's auc: 0.947402	valid_0's binary_logloss: 0.347607
+[28]	valid_0's auc: 0.947434	valid_0's binary_logloss: 0.343663
+[29]	valid_0's auc: 0.947418	valid_0's binary_logloss: 0.339915
+[30]	valid_0's auc: 0.947437	valid_0's binary_logloss: 0.336433
+[31]	valid_0's auc: 0.947456	valid_0's binary_logloss: 0.333215
+[32]	valid_0's auc: 0.947541	valid_0's binary_logloss: 0.33015
+[33]	valid_0's auc: 0.947431	valid_0's binary_logloss: 0.32735
+[34]	valid_0's auc: 0.947471	valid_0's binary_logloss: 0.324699
+[35]	valid_0's auc: 0.947498	valid_0's binary_logloss: 0.322169
+[36]	valid_0's auc: 0.947506	valid_0's binary_logloss: 0.319831
+[37]	valid_0's auc: 0.947508	valid_0's binary_logloss: 0.317631
+[38]	valid_0's auc: 0.947535	valid_0's binary_logloss: 0.31557
+[39]	valid_0's auc: 0.947568	valid_0's binary_logloss: 0.313583
+[40]	valid_0's auc: 0.947556	valid_0's binary_logloss: 0.311711
+[41]	valid_0's auc: 0.947571	valid_0's binary_logloss: 0.310027
+[42]	valid_0's auc: 0.94792	valid_0's binary_logloss: 0.308365
+[43]	valid_0's auc: 0.947932	valid_0's binary_logloss: 0.306813
+[44]	valid_0's auc: 0.947937	valid_0's binary_logloss: 0.305373
+[45]	valid_0's auc: 0.948435	valid_0's binary_logloss: 0.304032
+[46]	valid_0's auc: 0.948463	valid_0's binary_logloss: 0.302782
+[47]	valid_0's auc: 0.948628	valid_0's binary_logloss: 0.301566
+[48]	valid_0's auc: 0.948538	valid_0's binary_logloss: 0.300455
+[49]	valid_0's auc: 0.948706	valid_0's binary_logloss: 0.299362
+[50]	valid_0's auc: 0.948656	valid_0's binary_logloss: 0.298336
+[51]	valid_0's auc: 0.948879	valid_0's binary_logloss: 0.297418
+[52]	valid_0's auc: 0.948847	valid_0's binary_logloss: 0.296529
+[53]	valid_0's auc: 0.948936	valid_0's binary_logloss: 0.295658
+[54]	valid_0's auc: 0.948871	valid_0's binary_logloss: 0.294891
+[55]	valid_0's auc: 0.948885	valid_0's binary_logloss: 0.294121
+[56]	valid_0's auc: 0.948922	valid_0's binary_logloss: 0.293412
+[57]	valid_0's auc: 0.948924	valid_0's binary_logloss: 0.292824
+[58]	valid_0's auc: 0.949055	valid_0's binary_logloss: 0.292251
+[59]	valid_0's auc: 0.949047	valid_0's binary_logloss: 0.29164
+[60]	valid_0's auc: 0.949001	valid_0's binary_logloss: 0.291109
+[61]	valid_0's auc: 0.94897	valid_0's binary_logloss: 0.290632
+[62]	valid_0's auc: 0.948972	valid_0's binary_logloss: 0.290157
+[63]	valid_0's auc: 0.949024	valid_0's binary_logloss: 0.28976
+[64]	valid_0's auc: 0.94901	valid_0's binary_logloss: 0.289347
+[65]	valid_0's auc: 0.949099	valid_0's binary_logloss: 0.288969
+[66]	valid_0's auc: 0.949105	valid_0's binary_logloss: 0.288602
+[67]	valid_0's auc: 0.949127	valid_0's binary_logloss: 0.288232
+[68]	valid_0's auc: 0.949151	valid_0's binary_logloss: 0.287892
+[69]	valid_0's auc: 0.949119	valid_0's binary_logloss: 0.287567
+[70]	valid_0's auc: 0.949107	valid_0's binary_logloss: 0.287282
+[71]	valid_0's auc: 0.94928	valid_0's binary_logloss: 0.286957
+[72]	valid_0's auc: 0.949206	valid_0's binary_logloss: 0.286701
+[73]	valid_0's auc: 0.949298	valid_0's binary_logloss: 0.286425
+[74]	valid_0's auc: 0.949226	valid_0's binary_logloss: 0.286203
+[75]	valid_0's auc: 0.949193	valid_0's binary_logloss: 0.285971
+[76]	valid_0's auc: 0.949229	valid_0's binary_logloss: 0.285759
+[77]	valid_0's auc: 0.949219	valid_0's binary_logloss: 0.28557
+[78]	valid_0's auc: 0.949196	valid_0's binary_logloss: 0.285392
+[79]	valid_0's auc: 0.949191	valid_0's binary_logloss: 0.285249
+[80]	valid_0's auc: 0.949233	valid_0's binary_logloss: 0.285063
+[81]	valid_0's auc: 0.949265	valid_0's binary_logloss: 0.28488
+[82]	valid_0's auc: 0.949279	valid_0's binary_logloss: 0.284741
+[83]	valid_0's auc: 0.949299	valid_0's binary_logloss: 0.284598
+[84]	valid_0's auc: 0.949288	valid_0's binary_logloss: 0.284528
+[85]	valid_0's auc: 0.949293	valid_0's binary_logloss: 0.2844
+[86]	valid_0's auc: 0.949312	valid_0's binary_logloss: 0.284206
+[87]	valid_0's auc: 0.949337	valid_0's binary_logloss: 0.284095
+[88]	valid_0's auc: 0.949362	valid_0's binary_logloss: 0.283952
+[89]	valid_0's auc: 0.949344	valid_0's binary_logloss: 0.283873
+[90]	valid_0's auc: 0.949358	valid_0's binary_logloss: 0.283757
+[91]	valid_0's auc: 0.949368	valid_0's binary_logloss: 0.283637
+[92]	valid_0's auc: 0.949391	valid_0's binary_logloss: 0.283542
+[93]	valid_0's auc: 0.949352	valid_0's binary_logloss: 0.283457
+[94]	valid_0's auc: 0.949359	valid_0's binary_logloss: 0.283366
+[95]	valid_0's auc: 0.94937	valid_0's binary_logloss: 0.283272
+[96]	valid_0's auc: 0.949416	valid_0's binary_logloss: 0.283178
+[97]	valid_0's auc: 0.949422	valid_0's binary_logloss: 0.283071
+[98]	valid_0's auc: 0.94944	valid_0's binary_logloss: 0.282991
+[99]	valid_0's auc: 0.949436	valid_0's binary_logloss: 0.282907
+[100]	valid_0's auc: 0.949437	valid_0's binary_logloss: 0.282804
+[101]	valid_0's auc: 0.949463	valid_0's binary_logloss: 0.282718
+[102]	valid_0's auc: 0.949467	valid_0's binary_logloss: 0.282611
+[103]	valid_0's auc: 0.949413	valid_0's binary_logloss: 0.282568
+[104]	valid_0's auc: 0.949438	valid_0's binary_logloss: 0.282505
+[105]	valid_0's auc: 0.949397	valid_0's binary_logloss: 0.282461
+[106]	valid_0's auc: 0.949398	valid_0's binary_logloss: 0.282436
+[107]	valid_0's auc: 0.949398	valid_0's binary_logloss: 0.282421
+[108]	valid_0's auc: 0.949398	valid_0's binary_logloss: 0.282371
+[109]	valid_0's auc: 0.9494	valid_0's binary_logloss: 0.282298
+[110]	valid_0's auc: 0.949409	valid_0's binary_logloss: 0.282242
+[111]	valid_0's auc: 0.949381	valid_0's binary_logloss: 0.282197
+[112]	valid_0's auc: 0.949376	valid_0's binary_logloss: 0.282165
+[113]	valid_0's auc: 0.949371	valid_0's binary_logloss: 0.282112
+[114]	valid_0's auc: 0.949349	valid_0's binary_logloss: 0.282117
+[115]	valid_0's auc: 0.949337	valid_0's binary_logloss: 0.282083
+[116]	valid_0's auc: 0.949378	valid_0's binary_logloss: 0.282027
+[117]	valid_0's auc: 0.949325	valid_0's binary_logloss: 0.282046
+[118]	valid_0's auc: 0.949336	valid_0's binary_logloss: 0.282024
+[119]	valid_0's auc: 0.949339	valid_0's binary_logloss: 0.281989
+[120]	valid_0's auc: 0.949296	valid_0's binary_logloss: 0.281998
+[121]	valid_0's auc: 0.949303	valid_0's binary_logloss: 0.281956
+[122]	valid_0's auc: 0.949287	valid_0's binary_logloss: 0.281926
+[123]	valid_0's auc: 0.949295	valid_0's binary_logloss: 0.2819
+[124]	valid_0's auc: 0.949296	valid_0's binary_logloss: 0.281889
+[125]	valid_0's auc: 0.949244	valid_0's binary_logloss: 0.281893
+[126]	valid_0's auc: 0.949215	valid_0's binary_logloss: 0.28192
+[127]	valid_0's auc: 0.949213	valid_0's binary_logloss: 0.281911
+[128]	valid_0's auc: 0.949203	valid_0's binary_logloss: 0.281894
+[129]	valid_0's auc: 0.949189	valid_0's binary_logloss: 0.281886
+[130]	valid_0's auc: 0.949169	valid_0's binary_logloss: 0.281893
+[131]	valid_0's auc: 0.949181	valid_0's binary_logloss: 0.281866
+[132]	valid_0's auc: 0.949171	valid_0's binary_logloss: 0.281848
+[133]	valid_0's auc: 0.949146	valid_0's binary_logloss: 0.281862
+[134]	valid_0's auc: 0.949113	valid_0's binary_logloss: 0.28187
+[135]	valid_0's auc: 0.949099	valid_0's binary_logloss: 0.281879
+[136]	valid_0's auc: 0.949069	valid_0's binary_logloss: 0.281886
+[137]	valid_0's auc: 0.949066	valid_0's binary_logloss: 0.281882
+[138]	valid_0's auc: 0.949025	valid_0's binary_logloss: 0.28191
+[139]	valid_0's auc: 0.94902	valid_0's binary_logloss: 0.281924
+[140]	valid_0's auc: 0.949013	valid_0's binary_logloss: 0.281943
+[141]	valid_0's auc: 0.949018	valid_0's binary_logloss: 0.281945
+[142]	valid_0's auc: 0.949015	valid_0's binary_logloss: 0.281939
+[143]	valid_0's auc: 0.948988	valid_0's binary_logloss: 0.281969
+[144]	valid_0's auc: 0.949002	valid_0's binary_logloss: 0.281962
+[145]	valid_0's auc: 0.948987	valid_0's binary_logloss: 0.28196
+[146]	valid_0's auc: 0.948982	valid_0's binary_logloss: 0.281953
+[147]	valid_0's auc: 0.948986	valid_0's binary_logloss: 0.28193
+[148]	valid_0's auc: 0.948976	valid_0's binary_logloss: 0.281928
+[149]	valid_0's auc: 0.948973	valid_0's binary_logloss: 0.281924
+[150]	valid_0's auc: 0.948971	valid_0's binary_logloss: 0.281918
+[151]	valid_0's auc: 0.948974	valid_0's binary_logloss: 0.281908
+[152]	valid_0's auc: 0.948961	valid_0's binary_logloss: 0.281902
+Early stopping, best iteration is:
+[102]	valid_0's auc: 0.949467	valid_0's binary_logloss: 0.282611
+Evaluated only: auc
+
+Best iteration: 102
+Admission threshold chosen on validation: 0.25 (hit rate 56.79%, admits 0.5% of misses)
+  validation hit rate: LRU 43.51% | rule frequency_1min >= 6 56.97% | model 56.79%
+
+--- Single-feature AUC on validation (raw value as score) ---
+  full model           0.9495
+  frequency_1min       0.9445  (raw 0.9445)
+  frequency_5min       0.9456  (raw 0.9456)
+  recency_sec          0.8423  (raw 0.1577)
+  inter_arrival_avg    0.7705  (raw 0.2295)
+  payload_size_kb      0.5419  (raw 0.4581)
+
+--- Test set evaluation ---
+ROC AUC: 0.9485
+Average precision: 0.9541 (random baseline = reuse rate = 0.4689)
+At threshold 0.25: precision 0.785, recall 0.931
+
+--- Simulated hit rate on the test period (LRU, capacity 250) ---
+  LRU, admit everything:           46.72%
+  rule frequency_1min >= 6 :      58.65%  (admits 0.5% of misses)
+  model at threshold 0.25:       58.34%  (admits 0.6% of misses)
+
+--- Feature importance (gain) ---
+  frequency_1min       334047.9
+  inter_arrival_avg    24697.7
+  frequency_5min       6029.8
+  recency_sec          4248.5
+  payload_size_kb      425.7
+  query_type           0.0
+
+Saved model to artifacts/model.txt and metadata to artifacts/model_meta.json

@@ -385,3 +385,103 @@ request. Reducing the work per call helps on any machine.
 the lighter scoring path, or an evaluation needs timing that is stable
 across machines, in which case the profile should be fixed and recorded
 with the run.
+
+---
+
+## A Fixed 300-Second Look-Ahead Window as the Training Label
+
+**Date:** 2026-11-17
+
+**Rejected alternative:** Labeling a request 1 when the same key is requested
+again within 300 s.
+
+**Why it was considered:** It was the first label and needs no cache
+capacity.
+
+**Why it was rejected:** About 96% of rows were positive, so the label said
+nothing about whether caching pays off in a cache of 250 keys. In an offline
+simulation the resulting model admitted 73% of misses and beat plain LRU by
+2.9 points, against about 11 for the capacity-aware label. A 300 s window
+also made an exact embargo impossible on a 600 s workload.
+
+**Revisit if:** The cache becomes large enough that its turnover time is
+comparable to the window, or if a different capacity-independent target is
+needed.
+
+---
+
+## A Time Window Derived From the Capacity as the Label
+
+**Date:** 2026-11-17
+
+**Rejected alternative:** Using a short window, for example 5 s (roughly the
+time an LRU cache of 250 keys takes to turn over at this request rate and
+miss ratio), as the label.
+
+**Why it was considered:** It is simple and needs no new code, only
+`--window-sec`.
+
+**Why it was rejected:** It gave the same hit rate as the exact criterion in the
+offline study, but the right window depends on the request rate and the miss
+ratio, which change between workloads. The exact criterion needs only the
+capacity.
+
+**Revisit if:** The criterion becomes too slow on very long logs, or a time
+bound is needed for another reason.
+
+---
+
+## Choosing the Admission Threshold by Reject-Class F1
+
+**Date:** 2026-11-17
+
+**Rejected alternative:** Keeping the rule of choosing the threshold that
+maximizes F1 of the minority class on the validation set.
+
+**Why it was considered:** It was the existing method and needs no cache
+simulation.
+
+**Why it was rejected:** With the capacity-aware label it picks a probability
+threshold of about 0.59, which admits almost nothing and gave a hit rate of
+42.4%, below plain LRU (43.0%). Only thresholds around 0.2 to 0.3 work, so
+the threshold is chosen by simulated hit rate.
+
+**Revisit if:** The simulation becomes too slow, or a metric is found that
+tracks hit rate across thresholds.
+
+---
+
+## A Flat Five-Minute TTL for Admitted Keys
+
+**Date:** 2026-11-17
+
+**Rejected alternative:** Keeping `ttl_ms` at five minutes for every
+admitted key.
+
+**Why it was considered:** It was the starting value and the manager already
+supports TTL.
+
+**Why it was rejected:** It is not model-driven and adds a second variable to
+every comparison: hot keys expired after five minutes and cost an extra miss
+each. Admitted keys now never expire.
+
+**Revisit if:** A TTL model is trained (`label_ttl_sec` is still written for
+that), or a staleness requirement appears.
+
+---
+
+## Fitting Only on Requests That Miss
+
+**Date:** 2026-11-17
+
+**Rejected alternative:** Training only on requests that miss under LRU,
+since the model is only queried on misses.
+
+**Why it was considered:** It matches what the model sees in serving.
+
+**Why it was rejected:** In the offline study it changed the hit rate by less
+than 0.2 points, and it would need the dataset to carry hit or miss
+information or a simulation inside the pipeline.
+
+**Revisit if:** A different workload makes the two distributions differ much
+more than in this study.

@@ -1,0 +1,21 @@
+{
+  "model_name": "lightgbm-40b5939e",
+  "model_sha256": "40b5939eb6a6d0a8c5127b3b7dd794a6af8f3b5c0b2e81326b8732340258d0db",
+  "trained_at": "2026-11-18T10:32:13+00:00",
+  "code_version": "88b868ce0c786ea6dbc197c01681c271c66a9680",
+  "best_iteration": 102,
+  "admit_probability_threshold": 0.25,
+  "label": "label_reuse",
+  "capacity": 250,
+  "validation_hit_rate": 0.5678616264472033,
+  "validation_lru_hit_rate": 0.4350676523922444,
+  "scale_pos_weight": 1.1731079771773065,
+  "feature_names": [
+    "frequency_1min",
+    "frequency_5min",
+    "recency_sec",
+    "inter_arrival_avg",
+    "payload_size_kb",
+    "query_type"
+  ]
+}
