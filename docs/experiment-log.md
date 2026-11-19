@@ -305,8 +305,11 @@ Hit rate over all requests (warm-up included), mean over 8 seeds, in %:
   rows. The order of the policies matches and the offline figures are 0.4
   to 0.5 points lower; the cause of that offset is not established.
 - Run time: about 140 s for the 17 plans.
-- Related raw files: `docs/raw-results/exp-03-offline-compare.txt`,
-  `docs/raw-results/exp-03-offline-compare.json`
+- Related raw files: `docs/raw-results/exp-03-offline-compare.json`
+  (written by the tool itself: per-seed results, plan fingerprints and
+  `code_version`) and `docs/raw-results/exp-03-offline-compare.txt`. The
+  text file is the program output as printed in the terminal; the `/tmp`
+  copy of it was lost, so it was transcribed from the terminal.
 
 **One-line conclusion:** on independent seeds the model beats LRU by about
 11 to 12 points, LFU by about 2.7 to 3.1 and the tuned one-feature rule by
@@ -319,5 +322,101 @@ has not been compared with a real LRU run, and the LFU simulator follows
 `lfu.go` by reading it, not by a live comparison. The model admits 1.2% to
 1.4% of misses on these seeds after warm-up against 0.58% on the last 20% of
 the training plan; the reason has not been investigated.
+
+**Note:** the open points about the simulator (never compared with a real
+run, LFU followed from reading `lfu.go`) were examined for seed 1001 in
+Experiment 4.
+
+---
+
+## Experiment 4 — Offline simulator against real service runs
+
+**Date:** 2026-11-19
+**Commit hash:** d83c5e4242f12df0f027575d4c0ebb2dfa468aae — the
+`code_version` printed by `compare_real.py`, on a clean working tree (no
+`+dirty` suffix). The Go service, the ML service and the tools ran from
+this commit.
+
+**Parameters:**
+
+- Posts: 5,000 in MongoDB (`post_ids_sha256`
+  `08fd32d78b4d6ad273206a3772952be28428b7a5b1e0e570a7370cc828fc8203`)
+- Four real runs, each on its own empty log file (`config.yaml`
+  unchanged; settings by environment variable:
+  `CACHEPILOT_CACHE_POLICY`, `CACHEPILOT_CACHE_CAPACITY=250`,
+  `CACHEPILOT_LOGGING_PATH`): `lru` with bursts, `lfu` with bursts, `ml`
+  without bursts, `ml` with bursts. `lru` and `lfu` without bursts were
+  not run: that was decided before the LFU and `ml` results were known,
+  because the two algorithms do not depend on bursts.
+- Workload (all runs): `python zipfian_generator.py [--enable-burst] --seed
+1001 --total-requests 20000 --requests-per-sec 100 --zipf-param 0.9
+--output-root ../data/eval_runs/<run> --go-service-log-path
+../data/eval_runs/<run>/service.jsonl`, default burst settings.
+  `plan_sha256` without bursts
+  `c211f3b624d0cdc74fc9c849251b3f464b4fbab005e43ee920254279d09f4a7a`;
+  with bursts
+  `8c2325455459654d3a16d5077c26234be15ae5535f164fbd5ca4af89e31a0a14`
+  (3 bursts, 895 burst requests, 4.47% of the traffic). Both matched the
+  hashes in the runs' `run_config.json`.
+- `ml` runs: model `lightgbm-40b5939e`, admission threshold 0.25, ML
+  service on the same machine, started once before the first `ml` run and
+  left running for the second.
+- Comparison: `python evaluation/compare_real.py --log
+data/eval_runs/<run>/service.jsonl --policy <lru|lfu|ml> --seed 1001
+[--burst] --run-config data/eval_runs/<run>/run_*/run_config.json`.
+  The service's live log was used, after stopping the Go service.
+- Raw request logs and the comparison JSON files are stored locally under
+  `data/eval_runs/` (not in the repository).
+
+**Raw result:**
+
+- All four runs: 20,000 log records, 0 malformed lines, logged keys equal
+  to the planned keys, `plan_sha256` match. The workload summaries of
+  `lru` (bursts), `ml` (no bursts) and `ml` (bursts) reported 0 failed
+  requests; the summary of the `lfu` run was not recorded (20,000 aligned
+  log records leave no room for a failed request).
+- `lru`, bursts: hit rate after warm-up real 45.27%, simulated 45.27%; over
+  all requests 44.87% and 44.87%; hit/miss sequences identical over all
+  20,000 requests. Client latency avg/p50/p95/p99 4.89 / 5.18 / 6.36 /
+  6.88 ms.
+- `lfu`, bursts: 53.99% and 53.99% after warm-up; 52.94% and 52.94% over
+  all requests; identical.
+- `ml`, no bursts: sources 10,258 `cache-hit`, 9,726 `lightgbm-40b5939e`,
+  16 `fallback-lru` (16 of 9,742 misses, all within the first 21 requests;
+  share after the first 100 requests 0.00%, valid). Simulation as
+  `offline_compare.py` does it: real 53.09% against simulated 53.05% after
+  warm-up, 51.29% against 51.17% over all requests; 29 of 20,000 requests
+  differ (0.14%), the first at index 7 and 12 after warm-up (27 real hit /
+  simulated miss, 2 the other way). Simulation with the logged timestamps
+  and the real fallbacks: 53.09% and 53.09%, identical sequences. Client
+  latency avg/p50/p95/p99 5.94 / 4.95 / 8.77 / 9.25 ms.
+- `ml`, bursts: sources 10,584 `cache-hit`, 9,414 `lightgbm-40b5939e`, 2
+  `fallback-lru` (2 of 9,416 misses, requests 7,490 and 7,491; share after
+  the first 100 requests 0.02%, valid). Simulation as `offline_compare.py`
+  does it: real 55.05% against simulated 55.03% after warm-up, 52.92%
+  against 52.90% over all requests; 10 of 20,000 requests differ (0.05%),
+  the first at index 11,411 and all after warm-up (7 real hit / simulated
+  miss, 3 the other way). Simulation with the logged timestamps and the
+  real fallbacks: 55.05% and 55.05%, identical sequences. Client latency
+  avg/p50/p95/p99 5.90 / 4.90 / 8.76 / 9.20 ms.
+- Follow-up scratch check on the same logs (code not in the repository, so
+  not a formal result): for both `ml` runs, adding the real fallbacks to
+  the simulated decisions gave 0 differing requests with simulated time
+  and with logged time; without them, 29 and 10. None of the 10 differing
+  keys of the bursty run was a key admitted by a fallback.
+- Related raw files: `docs/raw-results/exp-04-lru_burst.txt`,
+  `exp-04-lfu_burst.txt`, `exp-04-ml_stat.txt`, `exp-04-ml_burst.txt`
+  (the program output of each comparison)
+
+**One-line conclusion:** on seed 1001 with 20,000 requests and capacity
+250, the simulator reproduces the real service's hit/miss sequence exactly
+for LRU and LFU, and for the model once the real fallbacks are included
+(29 and 10 requests differ without them, a hit-rate gap of 0.04 and 0.02
+points after warm-up), so the offline comparisons in Experiment 3 are not
+distorted by the simulator on these runs. The check covers one seed, one
+run length, one capacity and one model. Identical sequences do not prove
+that every model decision matched, latency, TTL and timeouts were not
+examined, and why the cold-started `ml` run had 16 fallbacks while the
+warm one had none in its first 100 requests was not investigated.
 
 <!-- Add real experiments here going forward -->

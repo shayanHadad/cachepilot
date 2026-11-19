@@ -1,0 +1,22 @@
+code_version d83c5e4242f12df0f027575d4c0ebb2dfa468aae
+log data/eval_runs/ml_stat/service.jsonl: 20000 records, 0 malformed line(s) skipped
+policy ml seed 1001 burst False requests 20000 capacity 250 warmup 2500
+plan_sha256 c211f3b624d0cdc74fc9c849251b3f464b4fbab005e43ee920254279d09f4a7a
+run_config plan_sha256 c211f3b624d0cdc74fc9c849251b3f464b4fbab005e43ee920254279d09f4a7a -> MATCH
+logged keys vs plan: OK (20000 logged, 20000 planned)
+
+sources: {'fallback-lru': 16, 'cache-hit': 10258, 'lightgbm-40b5939e': 9726}
+fallback-lru: 16 of 9742 misses (16 in the first 100 requests); share afterwards 0.00% -> VALID (limit 1%)
+
+ml: offline simulation as offline_compare.py does it (simulated time)
+  hit rate after warm-up   real  53.09   simulated  53.05
+  hit rate, all requests   real  51.29   simulated  51.17
+  hit/miss sequences differ at 29 of 20000 requests (0.14%), first at index 7, 12 after warm-up
+  real hit / simulated miss 27, real miss / simulated hit 2
+
+ml: simulation with the logged timestamps and the real fallbacks
+  hit rate after warm-up   real  53.09   simulated  53.09
+  hit rate, all requests   real  51.29   simulated  51.29
+  hit/miss sequences: IDENTICAL over 20000 requests
+
+wrote data/eval_runs/ml_stat/compare.json

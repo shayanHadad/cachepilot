@@ -1,0 +1,13 @@
+code_version d83c5e4242f12df0f027575d4c0ebb2dfa468aae
+log data/eval_runs/lru_burst/service.jsonl: 20000 records, 0 malformed line(s) skipped
+policy lru seed 1001 burst True requests 20000 capacity 250 warmup 2500
+plan_sha256 8c2325455459654d3a16d5077c26234be15ae5535f164fbd5ca4af89e31a0a14
+run_config plan_sha256 8c2325455459654d3a16d5077c26234be15ae5535f164fbd5ca4af89e31a0a14 -> MATCH
+logged keys vs plan: OK (20000 logged, 20000 planned)
+
+lru: real run against the simulator
+  hit rate after warm-up   real  45.27   simulated  45.27
+  hit rate, all requests   real  44.87   simulated  44.87
+  hit/miss sequences: IDENTICAL over 20000 requests
+
+wrote data/eval_runs/lru_burst/compare.json
