@@ -98,12 +98,16 @@ def load_posts(path: Path) -> Posts:
     )
 
 
-def compute_features(keys: np.ndarray, requests_per_sec: float) -> Features:
+def compute_features(keys: np.ndarray, requests_per_sec: float,
+                     timestamps_ms: Sequence[int] | None = None) -> Features:
     """Window features for every request, from the key's history before it.
 
     Mirrors build_dataset.compute_stats (and so tracker.go): entries older
     than 5 minutes are dropped, frequency_1min counts entries newer than
     one minute, inter_arrival_avg is the mean gap inside the window.
+
+    Time is simulated from the request index unless `timestamps_ms` gives
+    the millisecond timestamp of every request (for example from a real log).
     """
     n = len(keys)
     f1 = np.zeros(n, dtype=np.int64)
@@ -115,7 +119,8 @@ def compute_features(keys: np.ndarray, requests_per_sec: float) -> Features:
     first: dict[int, int] = {}  # index of the oldest entry still in the window
     for i in range(n):
         key = int(keys[i])
-        now = int(i * 1000.0 / requests_per_sec) / 1000.0  # ms resolution, like the log
+        ms = int(i * 1000.0 / requests_per_sec) if timestamps_ms is None else int(timestamps_ms[i])
+        now = ms / 1000.0  # ms resolution, like the log
 
         ts = history.get(key)
         if ts is None:

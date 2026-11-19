@@ -56,6 +56,23 @@ class FeatureParityTest(unittest.TestCase):
         self.assertGreater(got.frequency_5min.max(), 10)  # the window was actually exercised
 
 
+class ExplicitTimestampsTest(unittest.TestCase):
+    def test_simulated_timestamps_give_identical_features(self):
+        rng = np.random.default_rng(3)
+        keys = rng.integers(0, 20, size=1500)
+        rps = 5.0
+        explicit = [int(i * 1000.0 / rps) for i in range(len(keys))]
+        a = oc.compute_features(keys, rps)
+        b = oc.compute_features(keys, rps, timestamps_ms=explicit)
+        for name in ("frequency_1min", "frequency_5min", "recency_sec", "inter_arrival_avg"):
+            np.testing.assert_array_equal(getattr(a, name), getattr(b, name))
+
+    def test_jittered_timestamps_change_recency(self):
+        keys = np.array([1, 1])
+        f = oc.compute_features(keys, 100.0, timestamps_ms=[0, 37])
+        self.assertAlmostEqual(f.recency_sec[1], 0.037)
+
+
 class LfuTest(unittest.TestCase):
     def test_evicts_lowest_frequency(self):
         # a is hit twice, so it survives b and c; LRU would have dropped it.
