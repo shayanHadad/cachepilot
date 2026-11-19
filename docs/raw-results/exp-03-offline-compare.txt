@@ -1,0 +1,73 @@
+code_version edcf65125a2f58653ba42c0ee0b0d6431cd53bd4
+model lightgbm-40b5939e threshold 0.25
+posts 5000 post_ids_sha256 08fd32d78b4d6ad273206a3772952be28428b7a5b1e0e570a7370cc828fc8203
+seeds [1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008] requests 60000 rps 100.0 zipf 0.9 burst_share 0.1 capacity 250 warmup 2500
+
+rule tuned on seed 142 (train period, validation tail): k=6
+  hit rate by k: 1:48.68  2:52.69  3:55.71  4:56.38  5:56.86  6:57.21  7:54.44  8:52.36  9:51.35  10:49.29  11:47.31  12:45.93
+reproduction check, seed 142 last 12000 requests (model never saw them):
+  lru 46.22  lfu 53.62  rule 58.24  model 57.99
+
+[stationary]
+  seed 1001  lru 42.99  lfu 52.72  rule 53.89  model 55.06   model admit 1.20% of misses  bursts 0  [16s]
+  seed 1002  lru 43.49  lfu 52.52  rule 53.90  model 55.22   model admit 1.21% of misses  bursts 0  [24s]
+  seed 1003  lru 42.83  lfu 51.84  rule 53.63  model 54.78   model admit 1.41% of misses  bursts 0  [32s]
+  seed 1004  lru 42.65  lfu 52.46  rule 53.58  model 54.96   model admit 1.35% of misses  bursts 0  [40s]
+  seed 1005  lru 43.35  lfu 52.23  rule 53.80  model 55.25   model admit 1.31% of misses  bursts 0  [48s]
+  seed 1006  lru 42.71  lfu 52.43  rule 53.17  model 54.49   model admit 1.28% of misses  bursts 0  [56s]
+  seed 1007  lru 43.28  lfu 52.29  rule 53.73  model 55.07   model admit 1.39% of misses  bursts 0  [64s]
+  seed 1008  lru 42.95  lfu 51.62  rule 53.34  model 54.83   model admit 1.22% of misses  bursts 0  [72s]
+
+[burst]
+  seed 1001  lru 46.46  lfu 54.97  rule 56.19  model 57.48   model admit 1.18% of misses  bursts 12  [81s]
+  seed 1002  lru 46.62  lfu 54.13  rule 56.14  model 57.66   model admit 1.16% of misses  bursts 11  [90s]
+  seed 1003  lru 45.19  lfu 52.75  rule 55.25  model 56.36   model admit 1.43% of misses  bursts 9  [98s]
+  seed 1004  lru 46.36  lfu 54.65  rule 56.14  model 57.61   model admit 1.41% of misses  bursts 13  [106s]
+  seed 1005  lru 45.06  lfu 53.55  rule 54.95  model 56.40   model admit 1.31% of misses  bursts 6  [114s]
+  seed 1006  lru 47.13  lfu 54.02  rule 56.02  model 57.65   model admit 1.22% of misses  bursts 15  [121s]
+  seed 1007  lru 44.88  lfu 53.18  rule 54.75  model 56.15   model admit 1.27% of misses  bursts 6  [129s]
+  seed 1008  lru 44.35  lfu 52.80  rule 54.18  model 55.87   model admit 1.23% of misses  bursts 6  [138s]
+
+stationary: hit rate after warm-up (2500 requests excluded)
+  policy     mean %     sd
+  lru         43.03   0.31
+  lfu         52.26   0.37
+  rule        53.63   0.26
+  model       54.96   0.25
+  model minus  mean pts     sd   wins
+  lru             11.93   0.19   8/8
+  lfu              2.69   0.38   8/8
+  rule             1.33   0.12   8/8
+stationary: hit rate over all requests
+  policy     mean %     sd
+  lru         42.96   0.31
+  lfu         51.95   0.35
+  rule        52.46   0.26
+  model       54.23   0.24
+  model minus  mean pts     sd   wins
+  lru             11.26   0.18   8/8
+  lfu              2.28   0.36   8/8
+  rule             1.76   0.10   8/8
+
+burst: hit rate after warm-up (2500 requests excluded)
+  policy     mean %     sd
+  lru         45.76   1.00
+  lfu         53.76   0.83
+  rule        55.45   0.78
+  model       56.90   0.77
+  model minus  mean pts     sd   wins
+  lru             11.14   0.30   8/8
+  lfu              3.14   0.41   8/8
+  rule             1.45   0.18   8/8
+burst: hit rate over all requests
+  policy     mean %     sd
+  lru         45.60   0.95
+  lfu         53.41   0.77
+  rule        54.24   0.72
+  model       56.11   0.73
+  model minus  mean pts     sd   wins
+  lru             10.51   0.27   8/8
+  lfu              2.71   0.40   8/8
+  rule             1.88   0.17   8/8
+
+wrote /tmp/exp-03.json

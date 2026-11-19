@@ -849,6 +849,13 @@ always above zero, even for text posts, while the ML service sees
 - Malformed log lines (for example a truncated last line after a forced
   kill) are skipped with a warning.
 
+> **Update:** `evaluation/offline_compare.py` computes the same four
+> features for its simulated request sequences, and
+> `evaluation/test_offline_compare.py` checks them against
+> `build_features` in `build_dataset.py` for exact equality (see
+> "Offline Multi-Seed Policy Comparison"). That test covers the offline
+> port only; the port is still not compared with `tracker.go`.
+
 ---
 
 ## Look-Ahead Labels Are Computed in a Separate Pass, With a Right-Censoring Trim
@@ -1611,3 +1618,79 @@ points: LRU +11.7 / +11.1, LFU +2.6 / +2.9, rule >= 6 +1.7 / +1.9, rule
   `experiment-log.md`. The evaluation should include LRU, LFU and the tuned
   frequency rule next to the model, on seeds different from the training
   seeds.
+
+> **Update:** the real model has since been evaluated on independent seeds
+> (see "Offline Multi-Seed Policy Comparison" and Experiment 3 in
+> `experiment-log.md`). Its paired advantage was about 11 to 12 points over
+> LRU, 2.7 to 3.1 over LFU and 1.3 to 1.5 over the tuned rule, in all 16
+> paired runs, and its advantage over the rule was about the same with and
+> without bursts. The scratch study code itself is still not in the
+> repository.
+
+---
+
+## Offline Multi-Seed Policy Comparison
+
+### Problem
+
+Policies had only been compared in scratch code, with a proxy model, and
+the baseline rule had been tuned on the sequence it was compared on (see
+"Offline Study of the Admission Policy (Findings)"). The real model had
+not been evaluated on seeds it had never seen.
+
+### Decision
+
+`evaluation/offline_compare.py` builds the request plan for each
+evaluation seed (stationary and with bursts) with
+`workload_plan.build_plan`, computes the four window features, scores
+every request with the real model through `inference.decide` (the
+single-request path the service uses), and replays the sequence through
+LRU, LFU, a tuned `frequency_1min >= k` rule and the model on top of LRU,
+using `admission_sim.simulate_lru` and an LFU simulator. It reports the
+mean and standard deviation over seeds and the model's paired difference
+to each baseline, with the hit rate counted after a warm-up (default
+2,500 requests) and over all requests.
+
+- Seeds below 1000 are rejected in code, since training uses 42 and 142.
+- The rule's `k` is tuned the way `train.py` tunes it: on the validation
+  tail (last 15%) of the train period (first 80%) of the training plan
+  (seed 142), never on an evaluated sequence. The tool also scores the
+  last 20% of that plan as a reproduction check against Experiment 2.
+- Post ids and `media_size_kb` are read from MongoDB once by
+  `evaluation/fetch_media_sizes.py`, which writes
+  `data/eval/media_sizes.json` together with the post id fingerprint
+  computed by the generator's own hash function.
+
+### Why
+
+- Features use the windowing of `build_dataset.py`, and
+  `test_offline_compare.py` checks them against that file's
+  `build_features` for exact equality.
+- Time is simulated (request index divided by the rate, millisecond
+  resolution like the log), so a run is exactly reproducible; two runs of
+  the tool, one before and one after the commit, gave identical figures.
+- The model is scored one request at a time because that is the path that
+  runs in the service.
+- Fetching from MongoDB is a separate script because the ML virtual
+  environment has no pymongo and the system interpreter, which has it, has
+  no lightgbm. The fingerprint shows whether the id order matches the one
+  the generator used.
+- LFU follows `lfu.go`: frequency counts only while a key is cached, new
+  keys start at 1, a miss on a full cache evicts first and then inserts,
+  and ties evict the least recently used key.
+
+### Trade-offs / Limitations
+
+- Simulation only: no timing jitter, TTL, timeouts or fallbacks. Decision
+  latency and the fallback share need a run of the real system.
+- The simulator has not been compared with a real LRU run, and the LFU
+  simulator follows `lfu.go` by reading it, not by a live comparison.
+- The rule is tuned on a plan whose first 80% the model was trained on,
+  and the tuning replay uses every request, while `labeling.py` drops 250
+  censored rows. The tuned `k` came out as 6, the same as in Experiment 2.
+- One configuration (5,000 posts, Zipf 0.9, capacity 250) and one model; a
+  model is trained for one capacity.
+- The Python feature port is checked against `build_dataset.py`, not
+  against `tracker.go`.
+- A full run (17 plans of 60,000 requests) took about 140 s, mostly in
+  model scoring.

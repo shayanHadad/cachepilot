@@ -228,4 +228,96 @@ simulation in `train.py`, not from a real cache run, and one 120 s test
 segment says little about the comparison with the rule; the multi-seed
 comparison and a check against the real system are still to be done.
 
+**Note:** the multi-seed comparison on independent seeds is Experiment 3.
+The check against the real system is still open.
+
+---
+
+## Experiment 3 — Offline multi-seed policy comparison
+
+**Date:** 2026-11-19
+**Commit hash:** edcf65125a2f58653ba42c0ee0b0d6431cd53bd4 — the
+`code_version` printed by the tool, run on a clean working tree (no
+`+dirty` suffix). An earlier run on the same code before it was
+committed (`code_version` `df5ae20…+dirty`) gave identical figures, so
+the tool is deterministic.
+
+**Parameters:**
+
+- Command: `python -u evaluation/offline_compare.py --out
+/tmp/exp-03.json`, with the ML service virtual environment. Post ids
+  and media sizes came from `/usr/bin/python3
+  evaluation/fetch_media_sizes.py` (natural collection order).
+- Posts: 5,000 in MongoDB (`post_ids_sha256`
+  `08fd32d78b4d6ad273206a3772952be28428b7a5b1e0e570a7370cc828fc8203`),
+  1,787 of them with media
+- Model: `lightgbm-40b5939e`, admission threshold 0.25, trained for
+  cache.capacity 250 (Experiment 2). Policies are simulated (LRU of
+  capacity 250 for all of them); no cache.policy run.
+- Workload per run (simulated, `workload_plan.build_plan`): zipf_param
+  0.9, 60,000 requests at 100 per second, evaluation seeds 1001 to 1008,
+  each seed once stationary and once with bursts (burst_rate 1/60,
+  burst_share 0.10, burst_duration_sec 30, burst_min_idle_sec 10); the
+  per-seed `plan_sha256` values are in the raw JSON
+- Hit rate counted after a warm-up of 2,500 requests (primary), and over
+  all requests
+- Rule baseline: `frequency_1min >= k`, `k` tuned on the training plan
+  (seed 142, validation tail of the first 80%), never on an evaluated
+  sequence; k = 6 (validation hit rates by k from 1 to 12: 48.68, 52.69,
+  55.71, 56.38, 56.86, 57.21, 54.44, 52.36, 51.35, 49.29, 47.31, 45.93)
+- LFU follows `lfu.go`: eviction before insertion, ties to the least
+  recently used key (matched by reading the code)
+- Environment: Python with the versions pinned in
+  `ml-service/requirements.txt`
+
+**Raw result:**
+
+Hit rate after warm-up, mean over 8 seeds (sd in brackets), in %:
+
+| Condition  | LRU          | LFU          | Rule (k=6)   | Model        |
+| ---------- | ------------ | ------------ | ------------ | ------------ |
+| Stationary | 43.03 (0.31) | 52.26 (0.37) | 53.63 (0.26) | 54.96 (0.25) |
+| Bursts     | 45.76 (1.00) | 53.76 (0.83) | 55.45 (0.78) | 56.90 (0.77) |
+
+Paired difference, model minus baseline, in points, mean (sd), seeds won
+out of 8:
+
+| Condition  | vs LRU             | vs LFU            | vs rule           |
+| ---------- | ------------------ | ----------------- | ----------------- |
+| Stationary | +11.93 (0.19), 8/8 | +2.69 (0.38), 8/8 | +1.33 (0.12), 8/8 |
+| Bursts     | +11.14 (0.30), 8/8 | +3.14 (0.41), 8/8 | +1.45 (0.18), 8/8 |
+
+Hit rate over all requests (warm-up included), mean over 8 seeds, in %:
+
+| Condition  | LRU   | LFU   | Rule  | Model | Model − LRU | Model − LFU | Model − rule |
+| ---------- | ----- | ----- | ----- | ----- | ----------- | ----------- | ------------ |
+| Stationary | 42.96 | 51.95 | 52.46 | 54.23 | +11.26      | +2.28       | +1.76        |
+| Bursts     | 45.60 | 53.41 | 54.24 | 56.11 | +10.51      | +2.71       | +1.88        |
+
+- Misses the model admits: 1.16% to 1.43% per run after warm-up (stationary
+  1.20, 1.21, 1.41, 1.35, 1.31, 1.28, 1.39, 1.22; bursts 1.18, 1.16, 1.43,
+  1.41, 1.31, 1.22, 1.27, 1.23). Bursts per run: 12, 11, 9, 13, 6, 15, 6, 6
+  for seeds 1001 to 1008.
+- Reproduction check on the last 12,000 requests of the training plan
+  (seed 142, which the model never saw): LRU 46.22, LFU 53.62, rule 58.24,
+  model 57.99, with the model admitting 0.58% of misses. Experiment 2
+  reported 46.72 (LRU), 58.65 (rule) and 58.34 (model) on its own test
+  rows. The order of the policies matches and the offline figures are 0.4
+  to 0.5 points lower; the cause of that offset is not established.
+- Run time: about 140 s for the 17 plans.
+- Related raw files: `docs/raw-results/exp-03-offline-compare.txt`,
+  `docs/raw-results/exp-03-offline-compare.json`
+
+**One-line conclusion:** on independent seeds the model beats LRU by about
+11 to 12 points, LFU by about 2.7 to 3.1 and the tuned one-feature rule by
+about 1.3 to 1.5 points, winning in all 16 paired runs; its advantage over
+the rule is about the same with and without bursts (the difference between
+the two conditions is 0.12 points and was not tested), so no burst-specific
+advantage is measured. The figures come from a simulation (no timing, TTL,
+timeouts or fallbacks) of one configuration and one capacity, the simulator
+has not been compared with a real LRU run, and the LFU simulator follows
+`lfu.go` by reading it, not by a live comparison. The model admits 1.2% to
+1.4% of misses on these seeds after warm-up against 0.58% on the last 20% of
+the training plan; the reason has not been investigated.
+
 <!-- Add real experiments here going forward -->

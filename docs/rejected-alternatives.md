@@ -485,3 +485,23 @@ information or a simulation inside the pipeline.
 
 **Revisit if:** A different workload makes the two distributions differ much
 more than in this study.
+
+---
+
+## Tuning the Baseline Rule on the Evaluated Sequences
+
+**Date:** 2026-11-19
+
+**Rejected alternative:** Choosing the frequency rule's `k` on the same
+sequences the policies are compared on.
+
+**Why it was considered:** It is the simplest option, and it gives the
+rule its best possible score.
+
+**Why it was rejected:** It favours the baseline in a way the model does
+not get, and it mixes tuning with evaluation. The offline comparison tunes
+`k` on the training plan (seed 142), and evaluation seeds must be at
+least 1000.
+
+**Revisit if:** The evaluation protocol moves to cross-validation over
+seeds, with `k` tuned inside each fold.
