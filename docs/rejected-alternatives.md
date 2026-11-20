@@ -505,3 +505,51 @@ least 1000.
 
 **Revisit if:** The evaluation protocol moves to cross-validation over
 seeds, with `k` tuned inside each fold.
+
+---
+
+## Comparing the Simulator With the Real Service by Hit Rate Alone
+
+**Date:** 2026-11-19
+
+**Rejected alternative:** Judging the simulator by whether its hit rate
+equals the hit rate of a real run.
+
+**Why it was considered:** It needs only two numbers, and the service
+log already gives them.
+
+**Why it was rejected:** Equal rates can hide differences that cancel out,
+and a rate says nothing about where the two parts. `compare_real.py`
+compares the hit/miss sequence request by request, which is exact for the
+deterministic LRU and LFU, and for the model run it points at the first
+request where the sequences part.
+
+**Revisit if:** A comparison has to cover runs too long to keep the full
+log, in which case counts per window could replace the full sequence.
+
+---
+
+## Short-Window Frequency Features (5 s, 10 s) in the Tracker and the Model
+
+**Date:** 2026-11-20
+
+**Rejected alternative:** Adding `frequency_5s` and `frequency_10s` to the
+tracker, the proto, the pipeline and the model, to detect bursts faster
+than the 1-minute window.
+
+**Why it was considered:** It targets the central hypothesis directly: a
+previously cold post going viral should be visible in a few seconds, and
+the existing windows are 1 and 5 minutes.
+
+**Why it was rejected:** A scratch study trained on the same pipeline and
+settings as the current model and evaluated on 8 independent seeds found
+no gain: over the current model, +0.04 points under bursts (7 of 8 seeds)
+and +0.01 on stationary traffic for the 10 s feature, and +0.01 and -0.01
+with both short windows, against a bar of 0.5 points fixed before the run.
+The change touches the Go tracker, the proto, both generated stubs (with a
+hand-edited Python import), the pipeline and `inference.py`.
+
+**Revisit if:** Bursts become smaller or shorter than the default
+(`burst_share` 0.10, 30 s) so that the 1-minute count reacts too slowly,
+or a rule-based decider on a short window is wanted as a baseline in the
+running system, which would need the window in the tracker.

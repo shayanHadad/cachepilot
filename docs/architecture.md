@@ -856,6 +856,14 @@ always above zero, even for text posts, while the ML service sees
 > "Offline Multi-Seed Policy Comparison"). That test covers the offline
 > port only; the port is still not compared with `tracker.go`.
 
+> **Update:** in two real runs with policy `ml` (Experiment 4), the
+> hit/miss sequence of the Go service was reproduced exactly by a
+> simulation that decides with the model on features computed by the
+> Python port, once the real fallbacks were included. That is indirect
+> evidence that the port and `tracker.go` agree at the model's admission
+> threshold. It is not a comparison of feature values, which is still
+> missing.
+
 ---
 
 ## Look-Ahead Labels Are Computed in a Separate Pass, With a Right-Censoring Trim
@@ -1394,6 +1402,15 @@ of 0.68 ms.
 - Both smoke tests ran before the changes were committed, so they are not
   logged in `experiment-log.md`.
 
+> **Update:** two real runs with policy `ml` (Experiment 4, 20,000
+> requests at 100 per second each) had 16 of 9,742 misses and 2 of 9,416
+> misses fall back to `fallback-lru`, both well under the 1% limit. In the
+> first run all 16 were among the first 21 requests; in the second there
+> was none in the first 100 requests, and the two fallbacks were requests
+> 7,490 and 7,491. The second run started with the ML service already
+> warm. Why the cold start produced 16 fallbacks here and 4 in the earlier
+> smoke test, and why two appeared mid-run, was not examined.
+
 ---
 
 ## The Training Label Is Reuse Within the Cache's Reach
@@ -1523,6 +1540,11 @@ metric says little about it.
   bursts, seed 142, model `lightgbm-40b5939e`): threshold 0.25, validation hit rate 56.79% (LRU
   43.51%, rule `frequency_1min` >= 6 56.97%). On the last 20% of the run:
   LRU 46.72%, the rule 58.65%, the model 58.34% (admits 0.6% of misses).
+
+> **Update:** the simulator has since been compared with real runs of
+> the Go service (see "The Offline Simulator Is Checked Against Real
+> Service Runs"): the LRU hit/miss sequence was identical on one bursty
+> run of 20,000 requests. That check covers one seed and one capacity.
 
 ---
 
@@ -1694,3 +1716,190 @@ to each baseline, with the hit rate counted after a warm-up (default
   against `tracker.go`.
 - A full run (17 plans of 60,000 requests) took about 140 s, mostly in
   model scoring.
+
+> **Update:** the simulator and the LFU implementation were later checked
+> against real runs (see "The Offline Simulator Is Checked Against Real
+> Service Runs"), so the LFU simulator no longer rests on reading
+> `lfu.go` alone. The check covers one seed, one run length and one
+> capacity.
+
+> **Update:** a scratch study later found a stronger simple baseline than
+> the rule used here: "admit when `frequency_10s` >= 2" beat "admit when
+> `frequency_1min` >= 6" by about 0.7 to 1.0 points, so the model's margin
+> over the best simple rule is smaller than the 1.3 to 1.5 points reported
+> for the 1-minute rule (see "Short-Window Frequency Features Did Not Help
+> the Admission Model (Scratch Study)").
+
+---
+
+## The Offline Simulator Is Checked Against Real Service Runs
+
+### Problem
+
+Every offline comparison relies on the simulator predicting what the Go
+service does. Until now it had been checked against hand-written cases
+and against Experiment 2's own figures, but never against a real run of
+the service.
+
+### Decision
+
+`evaluation/compare_real.py` rebuilds the request plan of a run from its
+seed and checks that the keys in the service's live log are exactly the
+planned keys, in order (and, with `--run-config`, that `plan_sha256`
+equals the generator's). It stops if they differ, because hit/miss
+sequences are meaningless once requests are misaligned (a failed request
+is not logged). It then compares the logged hit/miss sequence with the
+simulated one request by request, not only by hit rate.
+
+- `lru` and `lfu`: the algorithms are deterministic and requests are
+  sequential, so the sequences are expected to be identical. Any
+  difference is a bug in the simulator, the plan or the service.
+- `ml`: two simulations are compared with the real run. One is what
+  `offline_compare.py` does (simulated time, the model decides every
+  admission). The other uses the logged timestamps and lets every logged
+  `fallback-lru` admit its key, because a fallback admits without asking
+  the model. The tool also counts decisions per source and the share of
+  `fallback-lru` among misses after the first 100 requests; above 1% the
+  run does not count, and the lazy gRPC connection is why the first
+  requests are left out.
+- Each run uses its own empty log file and the live log, not the
+  generator's snapshot (see "Workload Generator: Bounded Zipf Sampling,
+  Burst Toggle and Per-Run Output").
+
+### Why
+
+Equal hit rates can hide differences that cancel out, and they do not say
+where the two sequences part. The first differing request does.
+
+### Results
+
+Experiment 4 (seed 1001, 20,000 requests at 100 per second, capacity 250,
+one real run each; the model is `lightgbm-40b5939e`):
+
+| run             | hit rate after warm-up, real / simulated       | hit/miss sequence           |
+| --------------- | ---------------------------------------------- | --------------------------- |
+| `lru`, bursts   | 45.27% / 45.27%                                | identical                   |
+| `lfu`, bursts   | 53.99% / 53.99%                                | identical                   |
+| `ml`, no bursts | 53.09% / 53.05% (simulated time, no fallbacks) | 29 of 20,000 differ (0.14%) |
+| `ml`, bursts    | 55.05% / 55.03% (simulated time, no fallbacks) | 10 of 20,000 differ (0.05%) |
+
+With the logged timestamps and the real fallbacks, both `ml` sequences
+were identical. Fallbacks: 16 of 9,742 misses (all in the first 21
+requests) and 2 of 9,416 misses (requests 7,490 and 7,491).
+
+A scratch check (code not in the repository) on the same logs tried the
+four combinations of simulated or logged time with or without the real
+fallbacks. With the real fallbacks added there were 0 differing requests
+in all four cases for both runs, whichever time was used; without them
+there were 29 and 10 in both timing variants. So in these runs the
+fallbacks explain every difference and the timestamps none. None of the
+10 differing keys in the bursty run was a key admitted by a fallback, so
+the effect reached them through what the cache held (probably a slot
+occupied for longer); that mechanism was not examined.
+
+### Trade-offs / Limitations
+
+- One seed, one run length, one capacity and one model.
+  `lru`/`lfu` on stationary traffic were not run: the algorithms do not
+  depend on whether there are bursts, a choice made before the LFU and
+  `ml` results were known.
+- Identical hit/miss sequences show no visible difference. They do not
+  prove that every model decision matched, because a decision on a key
+  that is never requested again leaves no trace.
+- Latency, TTL and timeouts were not examined beyond the fallback share.
+  The causes of the fallbacks were not established.
+- The 1% fallback limit and the bars used to judge the `ml` differences
+  (more than 1% of requests, or more than 0.5 points of hit rate) were
+  set before the runs and are guesses, not derived from data.
+
+---
+
+## Short-Window Frequency Features Did Not Help the Admission Model (Scratch Study)
+
+### Problem
+
+The central hypothesis is that time-windowed features let the model adapt
+to a burst faster than frequency or recency alone. The only windows are 1
+and 5 minutes, and in the offline study no burst-specific advantage was
+visible. A 5 to 10 s window is the natural lever, but adding it to the
+tracker, the proto, both generated stubs, the pipeline and `inference.py`
+is a large change, so it was tried offline first.
+
+### Decision
+
+A scratch study (code in `data/scratch_windows/`, not in the repository,
+so not logged in `experiment-log.md`) trained three models the way
+Experiment 2's model was trained: the same plan (seed 142, bursts), and
+the repository's `labeling.py`, `time_split.py` and `train.py` split,
+class weight, LightGBM settings and threshold search by simulated hit
+rate. Only the feature set differed:
+
+- A: the six current features.
+- B: A plus `frequency_10s`.
+- C: A plus `frequency_5s` and `frequency_10s`.
+
+Rules "admit when the feature is at least k" on `frequency_1min`,
+`frequency_10s` and `frequency_5s` were tuned the same way. Everything was
+evaluated on seeds 1101 to 1108 (kept apart from the formal evaluation
+seeds 1001 to 1008), 60,000 requests each, stationary and with bursts
+(`burst_share` 0.10), capacity 250, 2,500 requests of warm-up excluded,
+with the batch scoring path.
+
+The decision bars were fixed before the run: a short-window model is worth
+a real implementation only if, over model A, its mean gain under bursts is
+at least 0.5 points, it wins in at least 7 of 8 seeds under bursts, and its
+gain under bursts exceeds its gain on stationary traffic by at least 0.3
+points. The bars are guesses, not derived from data. **No short-window
+feature is added to the tracker, the proto or the model.**
+
+### Results
+
+Reproduction check: model A reached best iteration 101, threshold 0.25 and
+a validation hit rate of 56.92% (admitting 0.55% of misses), against 102,
+0.25, 56.79% and 0.5% in Experiment 2; the 1-minute rule's `k` was 6 as
+there (validation 57.02%). The scratch data comes from the offline plan,
+not from a real log, so exact equality was not expected.
+
+Hit rate after warm-up, mean over 8 seeds, in %:
+
+| policy                     | stationary | bursts |
+| -------------------------- | ---------- | ------ |
+| LRU                        | 43.05      | 46.21  |
+| rule `frequency_1min` >= 6 | 53.55      | 55.65  |
+| rule `frequency_10s` >= 2  | 54.28      | 56.63  |
+| rule `frequency_5s` >= 2   | 52.58      | 54.72  |
+| model A                    | 55.03      | 57.27  |
+| model B                    | 55.04      | 57.31  |
+| model C                    | 55.03      | 57.28  |
+
+Paired difference over model A, in points (seeds won out of 8): B +0.01
+(5/8) stationary and +0.04 (7/8) under bursts; C -0.01 (3/8) and +0.01
+(5/8). Against the bars, model B passed only the "7 of 8 seeds" bar; both
+models failed the 0.5-point and the 0.3-point bars by a wide margin. In
+model B `frequency_10s` was the second most important feature by gain, so
+the model used it without gaining hit rate.
+
+An observation that was not planned, so it is post hoc: the rule on
+`frequency_10s` beat the rule on `frequency_1min` by 0.73 points on
+stationary traffic and 0.98 under bursts, in 8 of 8 seeds in both cases.
+Model A's lead over that stronger rule is about 0.75 points on stationary
+traffic and 0.64 under bursts (differences of the means; A also ahead in 8
+of 8 seeds, read by hand from the per-seed lines), against 1.48 and 1.62
+over the 1-minute rule. The lead is not larger under bursts, and the
+difference between the conditions was not tested.
+
+### Trade-offs / Limitations
+
+- Simulation only, one configuration (5,000 posts, Zipf 0.9, capacity 250)
+  and one burst shape (`burst_share` 0.10, 30 s). Smaller or shorter
+  bursts, where the 1-minute window reacts more slowly, were not tried.
+  A burst at this share sends about 10 requests per second to one key, so
+  the 1-minute count passes a threshold of 6 in about a second; this is an
+  explanation that was not tested.
+- Decision latency was not measured, and the extra features would add to
+  the request and to the model's scoring cost.
+- The rules on `frequency_10s` and `frequency_5s` would need windows the
+  tracker does not have, so they exist only offline.
+- The formal comparison (Experiment 3) used the 1-minute rule only. A
+  formal run with the stronger rule is still to be done on the formal
+  seeds.

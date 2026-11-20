@@ -327,6 +327,13 @@ the training plan; the reason has not been investigated.
 run, LFU followed from reading `lfu.go`) were examined for seed 1001 in
 Experiment 4.
 
+**Note:** a later scratch study (not logged: its code is not in the
+repository) found a stronger simple baseline than the rule used above,
+"admit when `frequency_10s` >= 2". The model's lead over the best simple
+rule is therefore smaller than the 1.3 to 1.5 points reported here; see
+"Short-Window Frequency Features Did Not Help the Admission Model
+(Scratch Study)" in `architecture.md`.
+
 ---
 
 ## Experiment 4 — Offline simulator against real service runs
