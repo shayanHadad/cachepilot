@@ -1,7 +1,11 @@
 """Tests for offline_compare.py (no model, no MongoDB). Run from evaluation/."""
 
+import contextlib
 import importlib.util
+import io
+import json
 import sys
+import tempfile
 import types
 import unittest
 from argparse import Namespace
@@ -71,6 +75,35 @@ class ExplicitTimestampsTest(unittest.TestCase):
         keys = np.array([1, 1])
         f = oc.compute_features(keys, 100.0, timestamps_ms=[0, 37])
         self.assertAlmostEqual(f.recency_sec[1], 0.037)
+
+
+class WindowCountTest(unittest.TestCase):
+    @staticmethod
+    def brute_force(keys, times_ms, window_sec):
+        out = []
+        for i, key in enumerate(keys):
+            now = times_ms[i] / 1000.0
+            out.append(sum(1 for j in range(i) if keys[j] == key and times_ms[j] / 1000.0 > now - window_sec))
+        return out
+
+    def test_matches_brute_force(self):
+        rng = np.random.default_rng(11)
+        keys = rng.integers(0, 12, size=600)
+        times = [int(i * 1000.0 / 4.0) for i in range(600)]
+        for window in (5, 10, 60):
+            np.testing.assert_array_equal(oc.window_count(keys, 4.0, window), self.brute_force(keys.tolist(), times, window))
+
+    def test_sixty_seconds_equals_frequency_1min(self):
+        rng = np.random.default_rng(12)
+        keys = rng.integers(0, 25, size=3000)
+        np.testing.assert_array_equal(
+            oc.window_count(keys, 5.0, oc.ONE_MIN_SEC), oc.compute_features(keys, 5.0).frequency_1min)
+
+    def test_boundary_is_strict_and_timestamps_can_be_given(self):
+        keys = np.array([7, 7, 7])
+        # gaps of exactly 10 s: the earlier request is not strictly newer than now - 10
+        self.assertEqual(oc.window_count(keys, 1.0, 10, timestamps_ms=[0, 10_000, 20_000]).tolist(), [0, 0, 0])
+        self.assertEqual(oc.window_count(keys, 1.0, 10, timestamps_ms=[0, 9_999, 19_000]).tolist(), [0, 1, 1])
 
 
 class LfuTest(unittest.TestCase):
@@ -156,14 +189,69 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(plan.sha256, build_plan(n_posts, oc.make_config(1001, True, args)).sha256)
 
         feats = oc.compute_features(plan.keys, args.rps)
+        f10 = oc.window_count(plan.keys, args.rps, oc.SHORT_WINDOW_SEC)
         fake = lambda key, f1, *rest: SimpleNamespace(admit=f1 >= 2)
-        res = oc.evaluate_plan(plan.keys, feats, posts, fake, k=2, capacity=50, warmup=200)
+        res = oc.evaluate_plan(plan.keys, feats, f10, posts, fake, k=2, k10=2, capacity=50, warmup=200)
 
+        self.assertEqual(set(res), set(oc.POLICIES))
         self.assertEqual(res["model"]["hit_rate"], res["rule"]["hit_rate"])
         self.assertEqual(res["model"]["hit_rate_all"], res["rule"]["hit_rate_all"])
         self.assertGreater(res["lru"]["hit_rate"], 0.0)
         self.assertLess(res["rule"]["admit_rate"], 1.0)
         self.assertEqual(res["lru"]["admit_rate"], 1.0)
+
+        direct = oc.simulate_lru(plan.keys.tolist(), (f10 >= 2).tolist(), 50, 200)
+        self.assertEqual(res["rule10"]["hit_rate"], direct.hit_rate)
+        self.assertEqual(res["rule10"]["admit_rate"], direct.admit_rate)
+
+
+class MainRunTest(unittest.TestCase):
+    """main() end to end, with a stand-in for inference.decide (no lightgbm)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        n_posts = 300
+        (self.dir / "media_sizes.json").write_text(json.dumps({
+            "post_ids_sha256": "test",
+            "ids": [f"{i:024x}" for i in range(n_posts)],
+            "media_size_kb": [0.0 if i % 3 else 90.0 for i in range(n_posts)],
+        }), encoding="utf-8")
+        (self.dir / "model.txt").write_text("", encoding="utf-8")
+        (self.dir / "model_meta.json").write_text(json.dumps({
+            "model_name": "lightgbm-test", "model_sha256": "0" * 64,
+            "admit_probability_threshold": 0.25, "capacity": 30}), encoding="utf-8")
+
+        fake = types.ModuleType("model.inference")
+        fake.init = lambda mode, path: None
+        fake.decide = lambda key, f1, *rest: SimpleNamespace(admit=f1 >= 2)
+        sys.modules["model.inference"] = fake
+        import model
+        self.had_attr = hasattr(model, "inference")
+        model.inference = fake
+
+    def tearDown(self):
+        import model
+        sys.modules.pop("model.inference", None)
+        if not self.had_attr:
+            del model.inference
+        self.tmp.cleanup()
+
+    def test_runs_and_reports_both_rules(self):
+        out_json = self.dir / "result.json"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            oc.main(["--media", str(self.dir / "media_sizes.json"), "--model", str(self.dir / "model.txt"),
+                     "--seeds", "1001", "1002", "--requests", "3000", "--capacity", "30", "--warmup", "300",
+                     "--out", str(out_json)])
+        text = out.getvalue()
+        self.assertIn("frequency_10s k=", text)
+        self.assertIn("rule10 minus rule", text)
+        data = json.loads(out_json.read_text(encoding="utf-8"))
+        self.assertIn("rule10_k", data)
+        first = data["results"]["burst"]["seeds"][0]["policies"]
+        self.assertEqual(set(first), set(oc.POLICIES))
+        self.assertIn("rule10_minus_rule", data["results"]["burst"]["after_warmup"])
 
 
 if __name__ == "__main__":

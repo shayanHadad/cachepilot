@@ -5,8 +5,9 @@ For every evaluation seed (stationary and bursty) it builds the request
 plan, computes the window features the way data-pipeline/build_dataset.py
 does, asks the real model what it would admit (inference.decide, one
 request at a time, like the live service), and replays the sequence
-through LRU, LFU, a tuned frequency rule and the model on top of LRU.
-It prints mean and sd per policy and the paired differences.
+through LRU, LFU, two tuned frequency rules (frequency_1min and
+frequency_10s) and the model on top of LRU. It prints mean and sd per
+policy and the paired differences.
 
 Setup, once, with the interpreter that has pymongo:
     /usr/bin/python3 evaluation/fetch_media_sizes.py
@@ -16,8 +17,9 @@ Run, with the ml-service venv:
 
 Time is simulated as index / requests_per_sec (millisecond resolution, like
 the request log), so there is no timing jitter and no TTL, timeout or
-fallback. The frequency rule's threshold k is tuned on the training run's
-plan (seed 142), never on an evaluated sequence.
+fallback. The frequency rules' thresholds k are tuned on the training run's
+plan (seed 142), never on an evaluated sequence. The 10-second rule exists
+only offline: the Go tracker has no 10-second window.
 """
 
 import argparse
@@ -62,8 +64,11 @@ TRAIN_FRACTION = 0.80
 VALID_FRACTION = 0.15
 RULE_KS = tuple(range(1, 13))
 
-POLICIES = ("lru", "lfu", "rule", "model")
-BASELINES = ("lru", "lfu", "rule")
+SHORT_WINDOW_SEC = 10
+
+# "rule" is the 1-minute rule of Experiment 3; "rule10" uses a 10-second window.
+POLICIES = ("lru", "lfu", "rule", "rule10", "model")
+BASELINES = ("lru", "lfu", "rule", "rule10")
 
 
 @dataclass(frozen=True)
@@ -145,6 +150,23 @@ def compute_features(keys: np.ndarray, requests_per_sec: float,
     return Features(f1, f5, recency, inter)
 
 
+def window_count(keys: np.ndarray, requests_per_sec: float, window_sec: float,
+                 timestamps_ms: Sequence[int] | None = None) -> np.ndarray:
+    """For every request, how many earlier requests of the same key are
+    strictly newer than now - window_sec. Same time convention and strict
+    comparison as the 1-minute feature of compute_features, so the 60-second
+    window equals frequency_1min."""
+    out = np.zeros(len(keys), dtype=np.int64)
+    history: dict[int, list[float]] = {}
+    for i in range(len(keys)):
+        ms = int(i * 1000.0 / requests_per_sec) if timestamps_ms is None else int(timestamps_ms[i])
+        now = ms / 1000.0
+        ts = history.setdefault(int(keys[i]), [])
+        out[i] = len(ts) - bisect_right(ts, now - window_sec)
+        ts.append(now)
+    return out
+
+
 def simulate_lfu(keys: Sequence, capacity: int, count_from: int = 0) -> SimResult:
     """LFU with go-cache-service's semantics: frequency counts only while a
     key is cached, new keys start at 1, ties evict the least recently used.
@@ -193,9 +215,9 @@ def simulate_lfu(keys: Sequence, capacity: int, count_from: int = 0) -> SimResul
     )
 
 
-def tune_rule_k(keys: list[int], frequency_1min: np.ndarray, capacity: int,
+def tune_rule_k(keys: list[int], frequency: np.ndarray, capacity: int,
                 ks: Sequence[int] = RULE_KS) -> tuple[int, dict[int, float]]:
-    """Picks k for the rule "admit when frequency_1min >= k" by simulated
+    """Picks k for the rule "admit when the frequency >= k" by simulated
     hit rate on the validation tail of the train period. Ties go to the
     lowest k. Also returns every k's hit rate."""
     split = int(len(keys) * TRAIN_FRACTION)
@@ -203,7 +225,7 @@ def tune_rule_k(keys: list[int], frequency_1min: np.ndarray, capacity: int,
     rates: dict[int, float] = {}
     best: int | None = None
     for k in ks:
-        result = simulate_lru(keys[:split], (frequency_1min[:split] >= k).tolist(), capacity, count_from)
+        result = simulate_lru(keys[:split], (frequency[:split] >= k).tolist(), capacity, count_from)
         rates[k] = result.hit_rate
         if best is None or result.hit_rate > rates[best]:
             best = k
@@ -227,19 +249,22 @@ def model_admissions(keys: list[int], feats: Features, posts: Posts, decide: Cal
     return out
 
 
-def evaluate_plan(keys: np.ndarray, feats: Features, posts: Posts, decide: Callable,
-                  k: int, capacity: int, warmup: int) -> dict[str, dict[str, float]]:
-    """Hit rates of all four policies on one sequence, counted after
-    `warmup` requests (hit_rate) and over every request (hit_rate_all)."""
+def evaluate_plan(keys: np.ndarray, feats: Features, frequency_10s: np.ndarray, posts: Posts,
+                  decide: Callable, k: int, k10: int, capacity: int,
+                  warmup: int) -> dict[str, dict[str, float]]:
+    """Hit rates of all policies on one sequence, counted after `warmup`
+    requests (hit_rate) and over every request (hit_rate_all)."""
     key_list = keys.tolist()
     admit_all = [True] * len(key_list)
     admit_rule = (feats.frequency_1min >= k).tolist()
+    admit_rule10 = (frequency_10s >= k10).tolist()
     admit_model = model_admissions(key_list, feats, posts, decide)
 
     sims: dict[str, Callable[[int], SimResult]] = {
         "lru": lambda cf: simulate_lru(key_list, admit_all, capacity, cf),
         "lfu": lambda cf: simulate_lfu(key_list, capacity, cf),
         "rule": lambda cf: simulate_lru(key_list, admit_rule, capacity, cf),
+        "rule10": lambda cf: simulate_lru(key_list, admit_rule10, capacity, cf),
         "model": lambda cf: simulate_lru(key_list, admit_model, capacity, cf),
     }
     out = {}
@@ -265,11 +290,13 @@ def summarize(rows: list[dict], metric: str = "hit_rate") -> dict:
     for other in BASELINES:
         diff = values["model"] - values[other]
         paired[other] = {"mean": float(diff.mean()), "sd": sd(diff), "wins": int((diff > 0).sum())}
+    gap = values["rule10"] - values["rule"]
     return {
         "n": len(rows),
         "mean": {p: float(values[p].mean()) for p in POLICIES},
         "sd": {p: sd(values[p]) for p in POLICIES},
         "paired": paired,
+        "rule10_minus_rule": {"mean": float(gap.mean()), "sd": sd(gap), "wins": int((gap > 0).sum())},
     }
 
 
@@ -281,6 +308,9 @@ def format_summary(title: str, s: dict) -> str:
     for other in BASELINES:
         d = s["paired"][other]
         lines.append(f"  {other:<12}{100 * d['mean']:9.2f}{100 * d['sd']:7.2f}{d['wins']:>4}/{s['n']}")
+    g = s["rule10_minus_rule"]
+    lines.append("  rule10 minus rule (not the model):")
+    lines.append(f"  {'':<12}{100 * g['mean']:9.2f}{100 * g['sd']:7.2f}{g['wins']:>4}/{s['n']}")
     return "\n".join(lines)
 
 
@@ -356,11 +386,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     # Tuning and reproduction check on the training run's plan.
     tune_plan = build_plan(n_posts, make_config(args.tune_seed, True, args))
     tune_feats = compute_features(tune_plan.keys, args.rps)
+    tune_f10 = window_count(tune_plan.keys, args.rps, SHORT_WINDOW_SEC)
     k, k_rates = tune_rule_k(tune_plan.keys.tolist(), tune_feats.frequency_1min, args.capacity)
-    print(f"\nrule tuned on seed {args.tune_seed} (train period, validation tail): k={k}")
-    print("  hit rate by k: " + "  ".join(f"{kk}:{100 * r:.2f}" for kk, r in k_rates.items()))
+    k10, k10_rates = tune_rule_k(tune_plan.keys.tolist(), tune_f10, args.capacity)
+    print(f"\nrules tuned on seed {args.tune_seed} (train period, validation tail): "
+          f"frequency_1min k={k}, frequency_{SHORT_WINDOW_SEC}s k={k10}")
+    print("  hit rate by k, frequency_1min:  " + "  ".join(f"{kk}:{100 * r:.2f}" for kk, r in k_rates.items()))
+    print(f"  hit rate by k, frequency_{SHORT_WINDOW_SEC}s:   " + "  ".join(f"{kk}:{100 * r:.2f}" for kk, r in k10_rates.items()))
     split = int(args.requests * TRAIN_FRACTION)
-    reference = evaluate_plan(tune_plan.keys, tune_feats, posts, inference.decide, k, args.capacity, split)
+    reference = evaluate_plan(tune_plan.keys, tune_feats, tune_f10, posts, inference.decide, k, k10, args.capacity, split)
     print(f"reproduction check, seed {args.tune_seed} last {args.requests - split} requests (model never saw them):")
     print("  " + pct(reference))
 
@@ -372,7 +406,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         for seed in args.seeds:
             plan = build_plan(n_posts, make_config(seed, burst, args))
             feats = compute_features(plan.keys, args.rps)
-            policies = evaluate_plan(plan.keys, feats, posts, inference.decide, k, args.capacity, args.warmup)
+            f10 = window_count(plan.keys, args.rps, SHORT_WINDOW_SEC)
+            policies = evaluate_plan(plan.keys, feats, f10, posts, inference.decide, k, k10, args.capacity, args.warmup)
             rows.append({
                 "seed": seed,
                 "plan_sha256": plan.sha256,
@@ -404,6 +439,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             "n_posts": n_posts,
             "rule_k": k,
             "rule_k_validation_hit_rates": {str(kk): r for kk, r in k_rates.items()},
+            "rule10_k": k10,
+            "rule10_k_validation_hit_rates": {str(kk): r for kk, r in k10_rates.items()},
             "reference_seed": {"seed": args.tune_seed, "policies": reference},
             "results": results,
         }, indent=2), encoding="utf-8")
