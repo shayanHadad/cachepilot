@@ -553,3 +553,27 @@ hand-edited Python import), the pipeline and `inference.py`.
 (`burst_share` 0.10, 30 s) so that the 1-minute count reacts too slowly,
 or a rule-based decider on a short window is wanted as a baseline in the
 running system, which would need the window in the tracker.
+
+---
+
+## A Tunable Rule Decision Mode in the Running Service
+
+**Date:** 2026-11-21
+
+**Rejected alternative:** Adding a `decision_mode` such as `rule` to the ML
+service (or a rule policy to the Go service) so that the frequency rules
+run in the real system next to the model.
+
+**Why it was considered:** It would measure the real hit rate and latency
+of the strongest simple baseline, not only its simulated hit rate.
+
+**Why it was rejected:** For now the baselines are compared offline. The
+simulator reproduced the real service's hit/miss sequence for LRU and LFU,
+and for the model once the real fallbacks were included (Experiment 4),
+so the simulated rule figures are trusted. The best rule uses a 10-second
+window the tracker does not have, so a real run would also need a tracker
+change.
+
+**Revisit if:** The evaluation needs the real latency or real hit rate of
+a rule, or the 10-second rule becomes the main competitor of the model
+and has to be measured on the running system.

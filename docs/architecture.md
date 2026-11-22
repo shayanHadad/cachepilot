@@ -1730,6 +1730,13 @@ to each baseline, with the hit rate counted after a warm-up (default
 > for the 1-minute rule (see "Short-Window Frequency Features Did Not Help
 > the Admission Model (Scratch Study)").
 
+> **Update:** `offline_compare.py` now also reports a rule on a 10-second
+> window (`rule10`, with `k` tuned on the training plan like the 1-minute
+> rule). It exists only offline, because the Go tracker has no 10-second
+> window. Experiment 5 re-ran the comparison with it on the formal seeds;
+> the figures for LRU, LFU, the 1-minute rule and the model were identical
+> to Experiment 3.
+
 ---
 
 ## The Offline Simulator Is Checked Against Real Service Runs
@@ -1903,3 +1910,11 @@ difference between the conditions was not tested.
 - The formal comparison (Experiment 3) used the 1-minute rule only. A
   formal run with the stronger rule is still to be done on the formal
   seeds.
+
+> **Update:** the formal run was done in Experiment 5 (seeds 1001 to 1008).
+> The 10-second rule beat the 1-minute rule by 0.61 points on stationary
+> traffic and 0.84 under bursts, in 8 of 8 seeds in both. The model's lead
+> over it was 0.72 points on stationary traffic and 0.61 under bursts, also
+> 8 of 8 in both, so the lead over the best simple rule is about half of
+> what Experiment 3 reported against the 1-minute rule, and it is not
+> larger under bursts. The lead over LRU and LFU is unchanged.
