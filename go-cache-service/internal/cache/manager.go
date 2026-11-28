@@ -45,7 +45,7 @@ type Manager struct {
 	cache  Cache
 	posts  PostFetcher
 	logger *logger.Logger
-	policy string // "lru", "lfu", or "ml"
+	policy string // "lru", "lfu", "ml", or "none" (no cache)
 
 	// decider and tracker are only used when policy == "ml"
 	decider   Decider
@@ -76,7 +76,7 @@ func NewManager(
 	expiryCleanupInterval time.Duration,
 ) (*Manager, error) {
 	switch policy {
-	case "lru", "lfu":
+	case "lru", "lfu", "none":
 	case "ml":
 		if dec == nil {
 			return nil, fmt.Errorf("cache: policy is \"ml\" but no Decider was provided")
@@ -85,7 +85,7 @@ func NewManager(
 			return nil, fmt.Errorf("cache: policy is \"ml\" but no features.Tracker was provided")
 		}
 	default:
-		return nil, fmt.Errorf("cache: unknown policy %q (expected lru, lfu, or ml)", policy)
+		return nil, fmt.Errorf("cache: unknown policy %q (expected lru, lfu, ml, or none)", policy)
 	}
 
 	m := &Manager{
@@ -127,37 +127,42 @@ func (m *Manager) Get(ctx context.Context, key string) ([]byte, error) {
 
 	status := types.StatusMiss
 	var source string
+	var fetchMs, decisionMs float64
 	if hit {
 		status = types.StatusHit
 		m.hits.Add(1)
 		source = "cache-hit"
 	} else {
+		fetchStart := time.Now()
 		fetched, err := m.posts.GetPost(ctx, key)
 		if err != nil {
 			return nil, err
 		}
+		fetchMs = float64(time.Since(fetchStart).Microseconds()) / 1000.0
 		value = fetched
 		m.misses.Add(1)
-		source = m.admit(ctx, key, value, stats, start)
+		source, decisionMs = m.admit(ctx, key, value, stats, start)
 	}
 
 	meta := decodeMeta(value)
 	latencyMs := float64(time.Since(start).Microseconds()) / 1000.0
-	m.logger.Log(types.NewLogEntry(start, key, status, latencyMs, len(value), meta.QueryType, source))
+	m.logger.Log(types.NewLogEntry(start, key, status, latencyMs, len(value), meta.QueryType, source).WithTimings(fetchMs, decisionMs))
 
 	return value, nil
 }
 
 // admit applies the configured policy's admission rule to a freshly
 // fetched value. Only called on a miss. Returns a string identifying
-// what made the decision — the policy name for lru/lfu, or the
+// what made the decision — the policy name for lru/lfu/none, or the
 // decider's own source for ml (see LogEntry.Source) — so the caller
-// can log it.
-func (m *Manager) admit(ctx context.Context, key string, value []byte, stats features.WindowStats, now time.Time) string {
+// can log it, and the time in milliseconds spent waiting for the
+// decider (0 for the other policies).
+func (m *Manager) admit(ctx context.Context, key string, value []byte, stats features.WindowStats, now time.Time) (string, float64) {
 	switch m.policy {
-	case "lru", "lfu":
+	case "lru", "lfu", "none":
+		// For "none" the underlying cache discards the value.
 		m.cache.Put(key, value)
-		return m.policy
+		return m.policy, 0
 
 	case "ml":
 		meta := decodeMeta(value)
@@ -170,7 +175,9 @@ func (m *Manager) admit(ctx context.Context, key string, value []byte, stats fea
 			QueryType:       meta.QueryType,
 		}
 
+		decideStart := time.Now()
 		decision := m.decide(ctx, key, feat)
+		decisionMs := float64(time.Since(decideStart).Microseconds()) / 1000.0
 		if decision.Admit {
 			// The deadline is set before Put so a concurrent cleanup
 			// sweep never sees a fresh value with a stale deadline.
@@ -181,10 +188,10 @@ func (m *Manager) admit(ctx context.Context, key string, value []byte, stats fea
 			}
 			m.cache.Put(key, value)
 		}
-		return decision.Source
+		return decision.Source, decisionMs
 
 	default:
-		return "unknown"
+		return "unknown", 0
 	}
 }
 

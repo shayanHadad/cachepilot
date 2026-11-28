@@ -32,7 +32,8 @@ type MongoConfig struct {
 
 // CacheConfig holds cache policy and sizing settings.
 type CacheConfig struct {
-	// Policy selects which eviction policy the manager uses: "lru", "lfu", or "ml".
+	// Policy selects which policy the manager uses: "lru", "lfu", "ml",
+	// or "none" (no cache, every request reads MongoDB).
 	Policy string `yaml:"policy"`
 	// Capacity is the maximum number of keys the cache holds.
 	Capacity int `yaml:"capacity"`
@@ -182,10 +183,10 @@ func (c *Config) Validate() error {
 	}
 
 	switch c.Cache.Policy {
-	case "lru", "lfu", "ml":
+	case "lru", "lfu", "ml", "none":
 		// ok
 	default:
-		return fmt.Errorf("cache.policy must be one of lru|lfu|ml, got %q", c.Cache.Policy)
+		return fmt.Errorf("cache.policy must be one of lru|lfu|ml|none, got %q", c.Cache.Policy)
 	}
 
 	if c.Cache.Capacity <= 0 {

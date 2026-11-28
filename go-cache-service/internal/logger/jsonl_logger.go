@@ -121,6 +121,8 @@ func (l *Logger) writeEntry(entry types.LogEntry) {
 		slog.Int("response_size", entry.ResponseSize),
 		slog.String("query_type", entry.QueryType),
 		slog.String("source", entry.Source),
+		slog.Float64("fetch_ms", entry.FetchMs),
+		slog.Float64("decision_ms", entry.DecisionMs),
 	)
 
 	if err := l.slogger.Handler().Handle(context.Background(), record); err != nil {

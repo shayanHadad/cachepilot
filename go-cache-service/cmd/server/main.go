@@ -117,13 +117,16 @@ func run() error {
 // configured policy. Even under the "ml" policy, Manager still needs
 // a concrete Cache to store admitted values in — LRU is used as that
 // underlying storage, with Manager layering ML-driven admission and
-// TTL logic on top of it.
+// TTL logic on top of it. The "none" policy uses a cache that stores
+// nothing, so every request reads MongoDB.
 func newCache(cfg config.CacheConfig) (cache.Cache, error) {
 	switch cfg.Policy {
 	case "lru", "ml":
 		return cache.NewLRU(cfg.Capacity), nil
 	case "lfu":
 		return cache.NewLFU(cfg.Capacity), nil
+	case "none":
+		return cache.NewNop(), nil
 	default:
 		// config.Validate() already rejects unknown policies, so
 		// reaching this is a bug elsewhere, not a normal runtime

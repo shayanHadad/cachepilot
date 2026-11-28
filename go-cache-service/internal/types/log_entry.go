@@ -35,16 +35,26 @@ type LogEntry struct {
 	QueryType string `json:"query_type"`
 
 	// Source identifies what actually produced this outcome: "cache-hit"
-	// for any hit, the policy name ("lru"/"lfu") for a baseline miss,
-	// or the decider's own source ("heuristic-v1", "fallback-lru",
-	// or a future model name) for an "ml" policy miss. Lets
-	// evaluation code count exactly how often decisions actually
-	// came from the ML service vs. fell back.
+	// for any hit, the policy name ("lru"/"lfu"/"none") for a baseline
+	// miss, or the decider's own source ("heuristic-v1", "fallback-lru",
+	// or a model name) for an "ml" policy miss. Lets evaluation code
+	// count exactly how often decisions actually came from the ML
+	// service vs. fell back.
 	Source string `json:"source"`
+
+	// FetchMs is the time spent reading the post from MongoDB, in
+	// milliseconds. It is 0 for a hit.
+	FetchMs float64 `json:"fetch_ms"`
+
+	// DecisionMs is the time spent waiting for the admission decision,
+	// in milliseconds. It is 0 for a hit and for the policies without a
+	// decider, and it includes the wait for the timeout when the call
+	// falls back.
+	DecisionMs float64 `json:"decision_ms"`
 }
 
 // NewLogEntry builds a LogEntry, converting the given time.Time to
-// Unix milliseconds.
+// Unix milliseconds. The timings are zero; add them with WithTimings.
 func NewLogEntry(ts time.Time, key string, status CacheStatus, latencyMs float64, responseSize int, queryType string, source string) LogEntry {
 	return LogEntry{
 		Timestamp:    ts.UnixMilli(),
@@ -55,4 +65,12 @@ func NewLogEntry(ts time.Time, key string, status CacheStatus, latencyMs float64
 		QueryType:    queryType,
 		Source:       source,
 	}
+}
+
+// WithTimings returns a copy of e with the MongoDB read time and the
+// decision time set, both in milliseconds.
+func (e LogEntry) WithTimings(fetchMs, decisionMs float64) LogEntry {
+	e.FetchMs = fetchMs
+	e.DecisionMs = decisionMs
+	return e
 }
