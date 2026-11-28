@@ -44,6 +44,12 @@ class WorkloadConfig:
     # end so everything from one run lives in one place.
     go_service_log_path: str = "../data/raw_logs/service.jsonl"
 
+    # Send every request over one shared HTTP session (persistent
+    # connection) instead of opening a new connection each time. Off by
+    # default so earlier runs stay comparable. It does not change the
+    # request plan, only the client-side timing.
+    keep_alive: bool = False
+
     # CLI-only: build and print the plan without sending anything.
     dry_run: bool = False
     dry_run_posts: int = 5000

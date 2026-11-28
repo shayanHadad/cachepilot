@@ -13,6 +13,7 @@ Usage:
     pip install pymongo numpy requests
     python zipfian_generator.py --total-requests 5000 --requests-per-sec 50
     python zipfian_generator.py --enable-burst --total-requests 5000
+    python zipfian_generator.py --keep-alive   # reuse one HTTP connection
     python zipfian_generator.py --enable-burst --dry-run   # plan only, needs numpy only
 """
 
@@ -110,6 +111,10 @@ def run_workload(cfg: WorkloadConfig) -> None:
     })
     print(f"Run output directory: {run_dir}")
 
+    # One shared session keeps the HTTP connection open between requests;
+    # the module-level functions open a new connection for every request.
+    http = requests.Session() if cfg.keep_alive else requests
+
     bursts_by_start = {b.start_index: b for b in plan.bursts}
     results_file = open(run_dir / "results.jsonl", "a", encoding="utf-8")
 
@@ -123,7 +128,7 @@ def run_workload(cfg: WorkloadConfig) -> None:
 
     start_time = time.monotonic()
     print(f"Starting workload: {cfg.total_requests} requests at {cfg.requests_per_sec}/s "
-          f"(burst={'on' if cfg.enable_burst else 'off'})")
+          f"(burst={'on' if cfg.enable_burst else 'off'}, keep-alive={'on' if cfg.keep_alive else 'off'})")
 
     progress_every = max(cfg.total_requests // 10, 1)
 
@@ -147,7 +152,7 @@ def run_workload(cfg: WorkloadConfig) -> None:
 
         req_start = time.monotonic()
         try:
-            resp = requests.get(cfg.service_url + "/get", params={"key": key}, timeout=5)
+            resp = http.get(cfg.service_url + "/get", params={"key": key}, timeout=5)
             latency_ms = (time.monotonic() - req_start) * 1000
             latencies_ms.append(latency_ms)
             if resp.status_code == 200:
@@ -215,8 +220,8 @@ def parse_args() -> WorkloadConfig:
     for field, default in asdict(defaults).items():
         flag = "--" + field.replace("_", "-")
         if isinstance(default, bool):
-            # The bool fields (enable_burst, dry_run) default to False,
-            # so store_true is enough — revisit this if a bool
+            # The bool fields (enable_burst, keep_alive, dry_run) default
+            # to False, so store_true is enough — revisit this if a bool
             # defaulting to True ever gets added.
             parser.add_argument(flag, action="store_true")
         else:
